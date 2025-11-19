@@ -6,6 +6,7 @@ const io = std.io;
 const assert = std.debug.assert;
 
 const ValType = types.ValType;
+const Section = types.sections.Section;
 
 const Opcode = opcode.Opcode;
 
@@ -45,19 +46,30 @@ pub const FuncLocal = struct {
     }
 };
 
-pub const Code = []const Opcode;
-
-pub const FuncBodyStart = struct {
+pub const FuncBody = struct {
     size: u32,
-    local_count: u32,
+    locals: Section(FuncLocal),
+    code: []const u8,
 
-    pub fn fromReader(reader: *io.Reader) !FuncBodyStart {
+    pub fn fromReader(reader: *io.Reader) !FuncBody {
         const size = try reader.takeLeb128(u32);
+
+        const initial_pos = reader.seek;
         const local_count = try reader.takeLeb128(u32);
+
+        for (0..local_count) |_| {
+            _ = try FuncLocal.fromReader(reader);
+        }
+        const bytes = reader.buffer[initial_pos..reader.seek];
+        const locals = try Section(FuncLocal).fromBytes(bytes);
+
+        const code_size = size - (reader.seek - initial_pos);
+        const code = try reader.take(code_size);
 
         return .{
             .size = size,
-            .local_count = local_count,
+            .locals = locals,
+            .code = code,
         };
     }
 };

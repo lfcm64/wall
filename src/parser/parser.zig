@@ -1,102 +1,76 @@
 const std = @import("std");
-const sections = @import("sections/sections.zig");
 const types = @import("../module/types.zig");
 
 const io = std.io;
 
 const module = types.module;
+const sections = types.sections;
 
-pub const Parsed = union(enum) {
-    CustomSection: module.CustomSection,
+pub const Payload = union(enum) {
+    custom_section: sections.CustomSection,
+    type_section: sections.TypeSection,
+    import_section: sections.ImportSection,
+    function_section: sections.FunctionSection,
+    table_section: sections.TableSection,
+    memory_section: sections.MemorySection,
+    global_section: sections.GlobalSection,
+    export_section: sections.ExportSection,
+    start_section: sections.StartSection,
+    element_section: sections.ElementSection,
+    code_section: sections.CodeSection,
+    data_section: sections.DataSection,
 
-    TypeSection: *sections.TypeSection,
-    ImportSection: *sections.ImportSection,
-    FunctionSection: *sections.FunctionSection,
-    TableSection: *sections.TableSection,
-    MemorySection: *sections.MemorySection,
-    GlobalSection: *sections.GlobalSection,
-    ExportSection: *sections.ExportSection,
-
-    StartSection: module.StartSection,
-
-    ElementSection: *sections.ElementSection,
-    CodeSection: *sections.CodeSection,
-    DataSection: *sections.DataSection,
-
-    ModuleHeader: module.ModuleHeader,
+    module_header: module.ModuleHeader,
 };
 
 pub const Parser = struct {
-    source: []const u8,
+    bytes: []const u8,
     reader: io.Reader,
 
     header_parsed: bool = false,
-    last_section: ?module.SectionType = null,
 
-    pub fn init(source: []const u8) Parser {
+    pub fn init(bytes: []const u8) Parser {
         return .{
-            .source = source,
-            .reader = io.Reader.fixed(source),
+            .bytes = bytes,
+            .reader = io.Reader.fixed(bytes),
         };
     }
 
     pub fn reset(parser: *Parser) void {
         parser.reader.seek = 0;
         parser.header_parsed = false;
-        parser.last_section = null;
     }
 
-    pub fn parseNext(parser: *Parser) !?Parsed {
+    pub fn parseNext(parser: *Parser) !?Payload {
         if (parser.reader.seek == parser.reader.end) return null;
 
         if (!parser.header_parsed) {
             parser.header_parsed = true;
-            return Parsed{
-                .ModuleHeader = try types.module.ModuleHeader.fromReader(&parser.reader),
+            return Payload{
+                .module_header = try module.ModuleHeader.fromReader(&parser.reader),
             };
         }
-        const header = try module.SectionHeader.fromReader(&parser.reader);
-
+        const header = try sections.SectionHeader.fromReader(&parser.reader);
         switch (header.type) {
-            .Custom => return Parsed{
-                .CustomSection = try module.CustomSection.fromReader(&parser.reader),
+            .Custom => return Payload{
+                .custom_section = try sections.CustomSection.fromReader(&parser.reader),
             },
-            .Start => {
-                parser.last_section = .Start;
-                return Parsed{
-                    .StartSection = try module.StartSection.fromReader(&parser.reader),
-                };
+            .Start => return Payload{
+                .start_section = try sections.StartSection.fromReader(&parser.reader),
             },
             inline else => |id| {
-                const info = @typeInfo(Parsed);
+                const info = @typeInfo(Payload);
                 const field = info.@"union".fields[@intFromEnum(id)];
-                const field_type = @typeInfo(field.type).pointer.child;
 
-                const source = parser.source[parser.reader.seek..][0..header.size];
+                const bytes = parser.bytes[parser.reader.seek..][0..header.size];
                 try parser.reader.discardAll(header.size);
 
-                parser.last_section = header.type;
                 return @unionInit(
-                    Parsed,
+                    Payload,
                     field.name,
-                    try field_type.fromBytes(source),
+                    try field.type.fromBytes(bytes),
                 );
             },
         }
     }
 };
-
-test {
-    const source = @embedFile("../tests/fib.wasm");
-
-    var parser = Parser.init(source);
-    _ = try parser.parseNext();
-
-    const section = try parser.parseNext();
-
-    const stream = section.?.TypeSection;
-
-    while (try stream.next()) |streamed| {
-        std.debug.print("{}\n", .{streamed});
-    }
-}

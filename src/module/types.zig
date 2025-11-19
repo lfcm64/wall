@@ -62,5 +62,6 @@ pub const function = @import("function.zig");
 pub const global = @import("global.zig");
 pub const import = @import("import.zig");
 pub const module = @import("module.zig");
+pub const sections = @import("sections.zig");
 pub const segment = @import("segment.zig");
 pub const table = @import("table.zig");
