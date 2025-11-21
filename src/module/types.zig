@@ -1,7 +1,21 @@
 const std = @import("std");
-const types = @import("types.zig");
 
 const io = std.io;
+
+pub const ModuleHeader = struct {
+    magic: u32,
+    version: u32,
+
+    pub fn fromReader(reader: *io.Reader) !ModuleHeader {
+        const magic = try reader.takeInt(u32, .little);
+        const version = try reader.takeInt(u32, .little);
+
+        return .{
+            .magic = magic,
+            .version = version,
+        };
+    }
+};
 
 pub const ValType = enum(u8) {
     i32 = 0x7f,
@@ -10,58 +24,17 @@ pub const ValType = enum(u8) {
     f64 = 0x7c,
 };
 
-pub const ExprValue = union(ValType) {
-    i32: i32,
-    i64: i64,
-    f32: f32,
-    f64: f64,
-};
-
-pub const Expr = struct {
-    value: ExprValue,
-    global_idx: u32,
-};
-
-pub const Mutability = enum(u8) {
-    @"const" = 0x00,
-    @"var" = 0x01,
-};
-
-pub const Limits = struct {
-    min: u32,
-    max: ?u32 = null,
-
-    pub fn fromReader(reader: *io.Reader) !Limits {
-        const tag = try reader.takeByte();
-        const min = try reader.takeLeb128(u32);
-
-        return switch (tag) {
-            0x00 => .{ .min = min },
-            0x01 => .{
-                .min = min,
-                .max = try reader.takeLeb128(u32),
-            },
-            else => error.A,
-        };
-    }
-};
-
 pub const Memory = Limits;
 
-pub const VarU32 = struct {
-    val: u32,
+pub const Element = @import("Element.zig");
+pub const Export = @import("Export.zig");
+pub const Expr = @import("Expr.zig");
+pub const Function = @import("Function.zig");
+pub const Global = @import("Global.zig");
+pub const Import = @import("Import.zig");
+pub const Limits = @import("Limits.zig");
+pub const Segment = @import("Segment.zig");
+pub const Table = @import("Table.zig");
 
-    pub fn fromReader(reader: *io.Reader) !VarU32 {
-        return .{ .val = try reader.takeLeb128(u32) };
-    }
-};
-
-pub const element = @import("element.zig");
-pub const @"export" = @import("export.zig");
-pub const function = @import("function.zig");
-pub const global = @import("global.zig");
-pub const import = @import("import.zig");
 pub const module = @import("module.zig");
-pub const sections = @import("sections.zig");
-pub const segment = @import("segment.zig");
-pub const table = @import("table.zig");
+pub const primitives = @import("primitives.zig");

@@ -1,7 +1,7 @@
 const std = @import("std");
-const parser = @import("parser/parser.zig");
-const validator = @import("parser/validation.zig");
-const printer = @import("parser/printer.zig");
+const Parser = @import("Parser.zig");
+const Validator = @import("validation/Validator.zig");
+const Printer = @import("Printer.zig");
 
 const Allocator = std.mem.Allocator;
 
@@ -23,14 +23,14 @@ pub const FrontendPipeline = struct {
     }
 
     pub fn run(pipeline: *FrontendPipeline) !void {
-        var p = parser.Parser.init(pipeline.source);
-        var v = validator.Validator.init(pipeline.allocator);
+        var p = Parser.init(pipeline.source);
+        var v = Validator.init(pipeline.allocator);
         defer v.deinit();
 
-        var pr = printer.Printer.init(std.fs.File.stdout());
+        var pr = Printer.init(std.fs.File.stdout());
 
         while (try p.parseNext()) |payload| {
-            try v.validatePayload(payload);
+            try v.validate(payload);
             if (pipeline.config.print_ast) try pr.printPayload(payload);
         }
     }
