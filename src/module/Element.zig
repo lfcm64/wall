@@ -20,9 +20,9 @@ pub fn fromReader(reader: *io.Reader) !Element {
     };
 
     const initial_pos = reader.seek;
-    const index_count = try reader.takeLeb128(u32);
+    const count = try reader.takeLeb128(u32);
 
-    for (0..index_count) |_| {
+    for (0..count) |_| {
         _ = try VarU32.fromReader(reader);
     }
     const bytes = reader.buffer[initial_pos..reader.seek];

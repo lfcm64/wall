@@ -1,6 +1,6 @@
 const std = @import("std");
 const Parser = @import("Parser.zig");
-const Validator = @import("validation/Validator.zig");
+const Validator = @import("Validator.zig");
 const Printer = @import("Printer.zig");
 
 const Allocator = std.mem.Allocator;

@@ -1,5 +1,6 @@
 pub const Opcode = enum(u8) {
-    @"unreachable" = 0x0,
+    // Control
+    @"unreachable" = 0x00,
     nop = 0x01,
     block = 0x02,
     loop = 0x03,
@@ -12,16 +13,19 @@ pub const Opcode = enum(u8) {
     @"return" = 0x0f,
     call = 0x10,
     call_indirect = 0x11,
+
+    // Parametric
     drop = 0x1a,
     select = 0x1b,
-    select_t = 0x1c,
+
+    // Variable
     @"local.get" = 0x20,
     @"local.set" = 0x21,
     @"local.tee" = 0x22,
     @"global.get" = 0x23,
     @"global.set" = 0x24,
-    @"table.get" = 0x25,
-    @"table.set" = 0x26,
+
+    // Memory
     @"i32.load" = 0x28,
     @"i64.load" = 0x29,
     @"f32.load" = 0x2a,
@@ -47,10 +51,14 @@ pub const Opcode = enum(u8) {
     @"i64.store32" = 0x3e,
     @"memory.size" = 0x3f,
     @"memory.grow" = 0x40,
+
+    // Numeric constants
     @"i32.const" = 0x41,
     @"i64.const" = 0x42,
     @"f32.const" = 0x43,
     @"f64.const" = 0x44,
+
+    // Numeric operations
     @"i32.eqz" = 0x45,
     @"i32.eq" = 0x46,
     @"i32.ne" = 0x47,
@@ -174,13 +182,4 @@ pub const Opcode = enum(u8) {
     @"i64.reinterpret_f64" = 0xbd,
     @"f32.reinterpret_i32" = 0xbe,
     @"f64.reinterpret_i64" = 0xbf,
-    @"i32.extend8_s" = 0xc0,
-    @"i32.extend16_s" = 0xc1,
-    @"i64.extend8_s" = 0xc2,
-    @"i64.extend16_s" = 0xc3,
-    @"i64.extend32_s" = 0xc4,
-    @"ref.null" = 0xd0,
-    @"ref.is_null" = 0xd1,
-    @"ref.func" = 0xd2,
-    misc = 0xfc,
 };

@@ -1,7 +1,7 @@
-const Registry = @This();
+const Store = @This();
 
 const std = @import("std");
-const types = @import("../module/types.zig");
+const types = @import("module/types.zig");
 
 const Allocator = std.mem.Allocator;
 const ArrayList = std.ArrayList;
@@ -33,7 +33,7 @@ pub fn Resource(comptime resource_type: ResourceType) type {
     };
 }
 
-pub fn deinit(self: *Registry, allocator: Allocator) void {
+pub fn deinit(self: *Store, allocator: Allocator) void {
     self.func_types.deinit(allocator);
     self.func.deinit(allocator);
     self.tables.deinit(allocator);
@@ -43,7 +43,7 @@ pub fn deinit(self: *Registry, allocator: Allocator) void {
 }
 
 pub fn append(
-    self: *Registry,
+    self: *Store,
     comptime resource_type: ResourceType,
     allocator: Allocator,
     resource: Resource(resource_type),
@@ -59,7 +59,7 @@ pub fn append(
     try list.append(allocator, resource);
 }
 
-pub fn get(self: *Registry, comptime resource_type: ResourceType, n: u32) ?Resource(resource_type) {
+pub fn get(self: *Store, comptime resource_type: ResourceType, n: u32) ?Resource(resource_type) {
     const list = switch (resource_type) {
         .func_types => &self.func_types,
         .func => &self.func,
@@ -72,7 +72,7 @@ pub fn get(self: *Registry, comptime resource_type: ResourceType, n: u32) ?Resou
     return list.items[n];
 }
 
-pub fn count(self: *Registry, comptime resource_type: ResourceType) u32 {
+pub fn count(self: *Store, comptime resource_type: ResourceType) u32 {
     const list = switch (resource_type) {
         .func_types => &self.func_types,
         .func => &self.func,
