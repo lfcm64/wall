@@ -13,7 +13,7 @@ pub const BlockType = union(enum) {
 
     pub fn fromReader(reader: *io.Reader) !BlockType {
         const byte = try reader.takeByte();
-        if (byte == 0x40) return .{.empty};
+        if (byte == 0x40) return .empty;
 
         return .{ .valtype = @enumFromInt(byte) };
     }
@@ -268,16 +268,16 @@ pub const Instruction = union(Opcode) {
 
         return switch (opcode) {
             // Control (blocktype)
-            .block, .loop, .@"if" => @unionInit(
+            inline .block, .loop, .@"if" => |op| @unionInit(
                 Instruction,
-                @tagName(opcode),
+                @tagName(op),
                 try BlockType.fromReader(reader),
             ),
 
             // Control (u32)
-            .br, .br_if, .call => @unionInit(
+            inline .br, .br_if, .call => |op| @unionInit(
                 Instruction,
-                @tagName(opcode),
+                @tagName(op),
                 try reader.takeLeb128(u32),
             ),
 
@@ -285,19 +285,19 @@ pub const Instruction = union(Opcode) {
             .call_indirect => .{ .call_indirect = try CallIndirect.fromReader(reader) },
 
             // Variable (u32)
-            .@"local.get",
+            inline .@"local.get",
             .@"local.set",
             .@"local.tee",
             .@"global.get",
             .@"global.set",
-            => @unionInit(
+            => |op| @unionInit(
                 Instruction,
-                @tagName(opcode),
+                @tagName(op),
                 try reader.takeLeb128(u32),
             ),
 
             // Memory (MemArg)
-            .@"i32.load",
+            inline .@"i32.load",
             .@"i64.load",
             .@"f32.load",
             .@"f64.load",
@@ -320,27 +320,31 @@ pub const Instruction = union(Opcode) {
             .@"i64.store8",
             .@"i64.store16",
             .@"i64.store32",
-            => @unionInit(
+            => |op| @unionInit(
                 Instruction,
-                @tagName(opcode),
+                @tagName(op),
                 try MemArg.fromReader(reader),
             ),
 
             // Memory (u32)
-            .@"memory.size", .@"memory.grow" => @unionInit(
+            inline .@"memory.size", .@"memory.grow" => |op| @unionInit(
                 Instruction,
-                @tagName(opcode),
+                @tagName(op),
                 try reader.takeLeb128(u32),
             ),
 
             // Numeric constants
             .@"i32.const" => .{ .@"i32.const" = try reader.takeLeb128(i32) },
             .@"i64.const" => .{ .@"i64.const" = try reader.takeLeb128(i64) },
-            .@"f32.const" => .{ .@"f32.const" = @bitCast(try reader.takeBytes(4)) },
-            .@"f64.const" => .{ .@"f64.const" = @bitCast(try reader.takeBytes(8)) },
+            .@"f32.const" => .{ .@"f32.const" = @bitCast(try reader.takeInt(u32, .little)) },
+            .@"f64.const" => .{ .@"f64.const" = @bitCast(try reader.takeInt(u64, .little)) },
 
             // No immediate
-            else => @unionInit(Instruction, @tagName(opcode), {}),
+            inline else => |op| @unionInit(
+                Instruction,
+                @tagName(op),
+                {},
+            ),
         };
     }
 };
