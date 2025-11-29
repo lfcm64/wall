@@ -1,6 +1,7 @@
 const std = @import("std");
 const clap = @import("clap");
-const pipeline = @import("pipeline.zig");
+
+const Validator = @import("validation/Validator.zig");
 
 pub fn main() !void {
     var gpa = std.heap.DebugAllocator(.{}){};
@@ -8,7 +9,7 @@ pub fn main() !void {
 
     const params = comptime clap.parseParamsComptime(
         \\-h, --help                Display this help and exit.
-        \\-v, --validate <str>...   Validate a Wasm module.
+        \\-v, --validate            Validate a Wasm module.
     );
 
     var diag = clap.Diagnostic{};
@@ -23,16 +24,12 @@ pub fn main() !void {
 
     const source = @embedFile("tests/fib.wasm");
 
-    var p = pipeline.FrontendPipeline.init(
-        gpa.allocator(),
-        source,
-        .{ .print_ast = true },
-    );
-
-    try p.run();
-
     if (res.args.help != 0)
         std.debug.print("--help\n", .{});
-    for (res.args.validate) |s|
-        std.debug.print("--validate = {s}\n", .{s});
+    if (res.args.validate != 0) {
+        var v = Validator.init(gpa.allocator(), source);
+        defer v.deinit();
+
+        try v.validateNext();
+    }
 }

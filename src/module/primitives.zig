@@ -34,6 +34,20 @@ pub fn Vec(comptime Item: type) type {
             };
         }
 
+        pub const Visitor = struct {
+            ptr: *anyopaque,
+            visit: *const fn (*anyopaque, Item, u32) anyerror!void,
+        };
+
+        pub fn visit(self: *const Self, visitor: Visitor) !void {
+            var it = self.iter();
+            var i: u32 = 0;
+            while (try it.next()) |item| {
+                try visitor.visit(visitor.ptr, item, i);
+                i += 1;
+            }
+        }
+
         pub fn iter(self: *const Self) Iterator {
             const bytes = self.bytes[self.item_offset..];
             return Iterator{

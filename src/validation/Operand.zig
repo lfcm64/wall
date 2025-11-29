@@ -1,11 +1,11 @@
-const FunctionValidator = @This();
+const OperandValidator = @This();
 
 const std = @import("std");
-const types = @import("module/types.zig");
+const types = @import("../module/types.zig");
 
-const Store = @import("Store.zig");
-const Opcode = @import("opcode.zig").Opcode;
-const Instruction = @import("instruction.zig").Instruction;
+const Context = @import("Context.zig");
+const Opcode = @import("../opcode.zig").Opcode;
+const Instruction = @import("../instruction.zig").Instruction;
 
 const io = std.io;
 const Allocator = std.mem.Allocator;
@@ -22,33 +22,35 @@ const ControlFrame = struct {
 };
 
 allocator: Allocator,
-store: *Store,
+reader: io.Reader,
+
+context: *Context,
 
 op_stack: OperandStack = .{},
 ctrl_stack: ControlStack = .{},
 
 locals: std.ArrayList(ValType),
 
-pub fn init(allocator: Allocator, store: *Store, func: types.Function, func_idx: u32) !FunctionValidator {
-    const locals = try expandAllLocals(allocator, store, func, func_idx);
+pub fn init(allocator: Allocator, context: *Context, func: types.Function, func_idx: u32) !OperandValidator {
+    const locals = try expandAllLocals(allocator, context, func, func_idx);
     return .{
         .allocator = allocator,
-        .store = store,
+        .reader = io.Reader.fixed(func.code),
+        .context = context,
         .locals = locals,
     };
 }
 
 fn expandAllLocals(
     allocator: Allocator,
-    store: *Store,
+    context: *Context,
     func: types.Function,
     func_idx: u32,
 ) !std.ArrayList(ValType) {
     var locals: std.ArrayList(ValType) = .{};
 
     // 1. Get function type from store
-    const func_type_idx = store.get(.funcs, func_idx) orelse error.NotFound;
-    const func_type = store.get(.func_types, func_type_idx) orelse error.NotFound;
+    const func_type = context.getFuncTypeByFuncIdx(func_idx);
 
     // 2. Add parameters first
     for (func_type.params) |p| {
@@ -58,43 +60,41 @@ fn expandAllLocals(
     // 3. Now expand local declarations
     var it = func.locals.iter();
     while (try it.next()) |local| {
-        for (local.count) |_| {
-            try local.append(allocator, local.val_type);
+        for (0..local.count) |_| {
+            try locals.append(allocator, local.val_type);
         }
     }
     return locals;
 }
 
-pub fn deinit(self: *FunctionValidator) void {
+pub fn deinit(self: *OperandValidator) void {
     self.locals.deinit(self.allocator);
     self.op_stack.deinit(self.allocator);
     self.ctrl_stack.deinit(self.allocator);
 }
 
-pub fn validate(self: *FunctionValidator) !void {
-    var reader = io.Reader.fixed(self.func.code);
-    while (reader.seek < reader.buffer.len) {
-        const instr = try Instruction.fromReader(&reader);
-        std.debug.print("{}\n", .{instr});
+pub fn validate(self: *OperandValidator) !void {
+    while (self.reader.seek < self.reader.buffer.len) {
+        const instr = try Instruction.fromReader(&self.reader);
         try self.validateInstruction(instr);
     }
 }
 
-fn pushOperand(self: *FunctionValidator, ty: ValType) !void {
+fn pushOperand(self: *OperandValidator, ty: ValType) !void {
     try self.op_stack.append(self.allocator, ty);
 }
 
-fn popOperand(self: *FunctionValidator) !ValType {
+fn popOperand(self: *OperandValidator) !ValType {
     if (self.op_stack.items.len == 0) return error.StackUnderflow;
     return self.op_stack.pop().?;
 }
 
-fn popOperandExpect(self: *FunctionValidator, expected: ValType) !void {
+fn popOperandExpect(self: *OperandValidator, expected: ValType) !void {
     const t = try self.popOperand();
     if (t != expected) return error.TypeMismatch;
 }
 
-fn validateInstruction(self: *FunctionValidator, instr: Instruction) !void {
+fn validateInstruction(self: *OperandValidator, instr: Instruction) !void {
     switch (instr) {
         // CONTROL
         .block,
@@ -111,8 +111,7 @@ fn validateInstruction(self: *FunctionValidator, instr: Instruction) !void {
         => {},
 
         .call => |idx| {
-            const type_idx = self.store.funcs.items[idx];
-            const func_type = self.store.func_types.items[type_idx];
+            const func_type = self.context.getFuncTypeByFuncIdx(idx);
 
             for (func_type.params) |param| {
                 try self.popOperandExpect(param);
@@ -137,24 +136,24 @@ fn validateInstruction(self: *FunctionValidator, instr: Instruction) !void {
         // VARIABLES
         .@"local.get" => |idx| {
             const local = self.locals.items[idx];
-            try self.pushOperand(local.val_type);
+            try self.pushOperand(local);
         },
         .@"local.set" => |idx| {
             const local = self.locals.items[idx];
-            try self.popOperandExpect(local.val_type);
+            try self.popOperandExpect(local);
         },
         .@"local.tee" => |idx| {
             const local = self.locals.items[idx];
-            try self.popOperandExpect(local.val_type);
-            try self.pushOperand(local.val_type);
+            try self.popOperandExpect(local);
+            try self.pushOperand(local);
         },
-        .@"global.get" => |_| {
-            //const glob = self.store.get(.globals, idx) orelse return error.GlobalNotFound;
-            //try self.pushOperand(glob.type.val_type);
+        .@"global.get" => |idx| {
+            const global = self.context.globals.items[idx];
+            try self.pushOperand(global.val_type);
         },
-        .@"global.set" => |_| {
-            //const glob = self.store.get(.globals, idx) orelse return error.GlobalNotFound;
-            //try self.popOperandExpect(glob.type.val_type);
+        .@"global.set" => |idx| {
+            const global = self.context.globals.items[idx];
+            try self.popOperandExpect(global.val_type);
         },
 
         // MEMORY LOAD

@@ -1,7 +1,7 @@
 const Parser = @This();
 
 const std = @import("std");
-const module = @import("module/module.zig");
+const module = @import("../module/module.zig");
 
 const io = std.io;
 
@@ -17,17 +17,20 @@ pub const Payload = union(enum) {
     custom_section: Section(.custom),
     type_section: Section(.type),
     import_section: Section(.import),
-    function_section: Section(.function),
+    function_section: Section(.func),
     table_section: Section(.table),
     memory_section: Section(.memory),
     global_section: Section(.global),
     export_section: Section(.@"export"),
     start_section: Section(.start),
-    element_section: Section(.element),
+    element_section: Section(.elem),
     code_section: Section(.code),
     data_section: Section(.data),
 
-    module_header: ModuleHeader,
+    module_header: struct {
+        magic: u32,
+        version: u32,
+    },
 };
 
 pub const State = enum {
@@ -53,7 +56,12 @@ pub fn parseNext(self: *Parser) !?Payload {
 
     if (self.state == .header) {
         self.state = .section;
-        return Payload{ .module_header = try ModuleHeader.fromReader(reader) };
+        return Payload{
+            .module_header = .{
+                .magic = try reader.takeInt(u32, .little),
+                .version = try reader.takeInt(u32, .little),
+            },
+        };
     }
 
     const header = try SectionHeader.fromReader(reader);
