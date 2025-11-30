@@ -1,16 +1,16 @@
 const Validator = @This();
 
 const std = @import("std");
-const module = @import("../module/module.zig");
-const types = @import("../module/types.zig");
+const sections = @import("../core/sections.zig");
+const types = @import("../core/types.zig");
 
 const Parser = @import("Parser.zig");
 const Context = @import("Context.zig");
-const OperandValidator = @import("Operand.zig");
+//const OperandValidator = @import("Operand.zig");
 
-const Section = module.Section;
 const Allocator = std.mem.Allocator;
 const Payload = Parser.Payload;
+const Section = sections.Section;
 
 allocator: Allocator,
 parser: Parser,
@@ -33,17 +33,17 @@ pub fn validateNext(self: *Validator) !void {
             if (header.magic != 0x6D736100) return error.WASMMagicError;
             if (header.version != 1) return error.VersionMismatch;
         },
-        .custom_section => {},
-        .type_section => |section| try self.validateTypeSection(section),
-        .import_section => |section| try self.validateImportSection(section),
-        .function_section => |section| try self.validateFuncSection(section),
-        .table_section => |section| try self.validateTableSection(section),
-        .memory_section => |section| try self.validateMemorySection(section),
-        .export_section => |section| try self.validateExportSection(section),
-        .start_section => |section| try self.validateStartSection(section),
-        .element_section => |section| try self.validateElementSection(section),
-        .code_section => |section| try self.validateCodeSection(section),
-        .data_section => |section| try self.validateDataSection(section),
+        //.custom_section => {},
+        //.type_section => |section| try self.validateTypeSection(section),
+        //.import_section => |section| try self.validateImportSection(section),
+        //.function_section => |section| try self.validateFuncSection(section),
+        //.table_section => |section| try self.validateTableSection(section),
+        //.memory_section => |section| try self.validateMemorySection(section),
+        //.export_section => |section| try self.validateExportSection(section),
+        //.start_section => |section| try self.validateStartSection(section),
+        //.element_section => |section| try self.validateElementSection(section),
+        //.code_section => |section| try self.validateCodeSection(section),
+        //.data_section => |section| try self.validateDataSection(section),
         else => {},
     };
 }
@@ -160,16 +160,12 @@ fn validateCodeSection(self: *Validator, section: Section(.code)) !void {
     const visitor = Section(.code).Visitor{
         .ptr = self,
         .visit = struct {
-            fn visit(ctx: *anyopaque, body: types.Function, idx: u32) anyerror!void {
+            fn visit(ctx: *anyopaque, _: types.Function, _: u32) anyerror!void {
                 const v: *Validator = @ptrCast(@alignCast(ctx));
-                var operand = try OperandValidator.init(
-                    v.allocator,
-                    &v.context,
-                    body,
-                    idx,
-                );
-                defer operand.deinit();
-                try operand.validate();
+                _ = v;
+                //var operand = try OperandValidator.init(v.allocator, &v.context, body, idx);
+                //defer operand.deinit();
+                //try operand.validate();
             }
         }.visit,
     };

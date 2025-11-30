@@ -4,8 +4,8 @@ const std = @import("std");
 const types = @import("../module/types.zig");
 
 const Context = @import("Context.zig");
-const Opcode = @import("../opcode.zig").Opcode;
-const Instruction = @import("../instruction.zig").Instruction;
+const Opcode = @import("../core/opcode.zig").Opcode;
+const Instruction = @import("../core/instr.zig").Instruction;
 
 const io = std.io;
 const Allocator = std.mem.Allocator;

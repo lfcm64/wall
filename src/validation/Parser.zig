@@ -1,19 +1,22 @@
 const Parser = @This();
 
 const std = @import("std");
-const module = @import("../module/module.zig");
+const sections = @import("../core/sections.zig");
 
 const io = std.io;
 
-const ModuleHeader = module.ModuleHeader;
-const SectionHeader = module.SectionHeader;
-const Section = module.Section;
+const Section = sections.Section;
 
 bytes: []const u8,
 reader: io.Reader,
 state: State = .header,
 
 pub const Payload = union(enum) {
+    module_header: struct {
+        magic: u32,
+        version: u32,
+    },
+
     custom_section: Section(.custom),
     type_section: Section(.type),
     import_section: Section(.import),
@@ -26,11 +29,6 @@ pub const Payload = union(enum) {
     element_section: Section(.elem),
     code_section: Section(.code),
     data_section: Section(.data),
-
-    module_header: struct {
-        magic: u32,
-        version: u32,
-    },
 };
 
 pub const State = enum {
@@ -64,20 +62,39 @@ pub fn parseNext(self: *Parser) !?Payload {
         };
     }
 
-    const header = try SectionHeader.fromReader(reader);
+    const section_type: sections.SectionType = @enumFromInt(try reader.takeByte());
+    const size = try reader.takeLeb128(u32);
 
-    const bytes = self.bytes[reader.seek..][0..header.size];
-    try reader.discardAll(header.size);
+    const bytes = self.bytes[reader.seek..][0..size];
+    try reader.discardAll(size);
 
-    switch (header.type) {
-        inline else => |section_type| {
+    switch (section_type) {
+        .custom => {
+            const name_size = try reader.takeLeb128(u32);
+            const name = try reader.take(name_size);
+
+            const section_bytes_size = try reader.takeLeb128(u32);
+            const section_bytes = try reader.take(section_bytes_size);
+
+            return Payload{
+                .custom_section = .{
+                    .name = name,
+                    .bytes = section_bytes,
+                },
+            };
+        },
+        .start => {
+            const func_idx = try reader.takeLeb128(u32);
+            return Payload{ .start_section = func_idx };
+        },
+        inline else => |ty| {
             const info = @typeInfo(Payload);
-            const field = info.@"union".fields[@intFromEnum(section_type)];
+            const field = info.@"union".fields[@intFromEnum(ty) + 1];
 
             return @unionInit(
                 Payload,
                 field.name,
-                try Section(section_type).fromBytes(bytes),
+                try Section(ty).fromBytes(bytes),
             );
         },
     }

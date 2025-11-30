@@ -35,7 +35,7 @@ pub fn Section(comptime section_type: SectionType) type {
         .start => indices.FuncIdx,
         .elem => SectionLimited(types.Element, types.Element.fromReader),
         .code => SectionLimited(types.FuncBody, types.FuncBody.fromReader),
-        .data => SectionLimited(types.Segment, types.Element.fromReader),
+        .data => SectionLimited(types.Segment, types.Segment.fromReader),
     };
 }
 

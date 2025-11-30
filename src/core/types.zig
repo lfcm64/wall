@@ -93,7 +93,7 @@ pub const GlobalType = struct {
         const mut: Mutability = @enumFromInt(try reader.takeByte());
 
         return .{
-            .val_type = ty,
+            .ty = ty,
             .mut = mut,
         };
     }
