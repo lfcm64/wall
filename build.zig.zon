@@ -1,5 +1,5 @@
 .{
-    .name = .weld,
+    .name = .wall,
     .version = "0.0.1",
     .dependencies = .{
         .clap = .{
@@ -9,5 +9,5 @@
     },
     .minimum_zig_version = "0.15.2",
     .paths = .{""},
-    .fingerprint = 0x1a27cf1832ee4672,
+    .fingerprint = 0x13f5eff6a88bce5d,
 }
