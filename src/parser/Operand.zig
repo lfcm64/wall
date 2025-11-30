@@ -1,11 +1,13 @@
 const OperandValidator = @This();
 
 const std = @import("std");
-const types = @import("../module/types.zig");
+const types = @import("../core/types.zig");
+const instr = @import("../core/instr.zig");
 
 const Context = @import("Context.zig");
 const Opcode = @import("../core/opcode.zig").Opcode;
-const Instruction = @import("../core/instr.zig").Instruction;
+
+const Instruction = instr.Instruction;
 
 const io = std.io;
 const Allocator = std.mem.Allocator;
@@ -31,7 +33,7 @@ ctrl_stack: ControlStack = .{},
 
 locals: std.ArrayList(ValType),
 
-pub fn init(allocator: Allocator, context: *Context, func: types.Function, func_idx: u32) !OperandValidator {
+pub fn init(allocator: Allocator, context: *Context, func: types.FuncBody, func_idx: u32) !OperandValidator {
     const locals = try expandAllLocals(allocator, context, func, func_idx);
     var ctrl_stack: ControlStack = .{};
     try ctrl_stack.append(
@@ -54,24 +56,21 @@ pub fn init(allocator: Allocator, context: *Context, func: types.Function, func_
 fn expandAllLocals(
     allocator: Allocator,
     context: *Context,
-    func: types.Function,
+    func: types.FuncBody,
     func_idx: u32,
 ) !std.ArrayList(ValType) {
     var locals: std.ArrayList(ValType) = .{};
 
-    // 1. Get function type from store
     const func_type = context.getFuncTypeByFuncIdx(func_idx);
 
-    // 2. Add parameters first
     for (func_type.params) |p| {
         try locals.append(allocator, p);
     }
 
-    // 3. Now expand local declarations
     var it = func.locals.iter();
     while (try it.next()) |local| {
         for (0..local.count) |_| {
-            try locals.append(allocator, local.val_type);
+            try locals.append(allocator, local.ty);
         }
     }
     return locals;
@@ -85,9 +84,9 @@ pub fn deinit(self: *OperandValidator) void {
 
 pub fn validate(self: *OperandValidator) !void {
     while (self.reader.seek < self.reader.buffer.len) {
-        const instr = try Instruction.fromReader(&self.reader);
-        std.debug.print("{}\n", .{instr});
-        try self.validateInstruction(instr);
+        const instruction = try Instruction.fromReader(&self.reader);
+        std.debug.print("{}\n", .{instruction});
+        try self.validateInstruction(instruction);
     }
 }
 
@@ -150,30 +149,15 @@ fn markUnreachable(self: *OperandValidator) void {
     self.op_stack.items.len = frame.height;
 }
 
-fn validateInstruction(self: *OperandValidator, instr: Instruction) !void {
-    switch (instr) {
+fn validateInstruction(self: *OperandValidator, instruction: Instruction) !void {
+    switch (instruction) {
         // CONTROL
-        .block => |block| {
-            const operands = switch (block) {
-                .empty => &[_]ValType{},
-                .valtype => &[_]ValType{block.valtype},
-            };
-            try self.pushControlFrame(.block, operands, operands);
-        },
-        .loop => |loop| {
-            const operands = switch (loop) {
-                .empty => &[_]ValType{},
-                .valtype => &[_]ValType{loop.valtype},
-            };
-            try self.pushControlFrame(.loop, operands, operands);
-        },
-        .@"if" => |if_block| {
+        .block => |block| try self.validateBlockTypeOp(.block, block),
+        .loop => |block| try self.validateBlockTypeOp(.loop, block),
+
+        .@"if" => |block| {
             _ = try self.popOperandExpect(.i32);
-            const operands = switch (if_block) {
-                .empty => &[_]ValType{},
-                .valtype => &[_]ValType{if_block.valtype},
-            };
-            try self.pushControlFrame(.@"if", operands, operands);
+            try self.validateBlockTypeOp(.@"if", block);
         },
         .@"else" => {
             const frame = try self.popControlFrame();
@@ -184,61 +168,18 @@ fn validateInstruction(self: *OperandValidator, instr: Instruction) !void {
             const frame = try self.popControlFrame();
             try self.pushOperands(frame.end_types);
         },
-        .br => |label| {
-            if (label >= self.ctrl_stack.items.len) return error.ValidateBrInvalidLabel;
-            const frame = self.ctrl_stack.items[self.ctrl_stack.items.len - 1 - label];
 
-            const operands = if (frame.opcode == .loop) frame.start_types else frame.end_types;
-            _ = try self.popOperandsExpect(operands);
-            self.markUnreachable();
-        },
-        .br_if => |label| {
-            if (label >= self.ctrl_stack.items.len) return error.ValidateBrIfInvalidLabel;
-            const frame = self.ctrl_stack.items[self.ctrl_stack.items.len - 1 - label];
+        .br => |label| try self.validateBr(label),
+        .br_if => |label| try self.validateBrIf(label),
+        .br_table => |table| try self.validateBrTable(table),
 
-            const operands = if (frame.opcode == .loop) frame.start_types else frame.end_types;
-            _ = try self.popOperandExpect(.i32);
-            _ = try self.popOperandsExpect(operands);
-            try self.pushOperands(operands);
-        },
-        .br_table => |table| {
-            _ = try self.popOperandExpect(.i32);
-            if (table.labels.count >= self.ctrl_stack.items.len) return error.ValidateBrTableInvalidLabel;
-
-            const default_label = table.default_label;
-            const frame = self.ctrl_stack.items[self.ctrl_stack.items.len - 1 - default_label];
-
-            const default_operands = if (frame.opcode == .loop) frame.start_types else frame.end_types;
-
-            var it = table.labels.iter();
-            while (try it.next()) |label| {
-                if (label.val >= self.ctrl_stack.items.len) return error.ValidateBrTableInvalidLabelN;
-                const frame_n = self.ctrl_stack.items[self.ctrl_stack.items.len - 1 - label.val];
-
-                const operands = if (frame_n.opcode == .loop) frame_n.start_types else frame_n.end_types;
-                if (operands.len != default_operands.len) return error.ValidateBrTableInvalidLabelWrongArity;
-
-                if (default_operands.len > 64) return error.TODOAllocation;
-
-                var temp = [_]ValType{.i32} ** 64;
-                for (operands, 0..) |_, i| {
-                    temp[i] = try self.popOperandExpect(operands[default_operands.len - i - 1]);
-                }
-
-                for (operands, 0..) |_, i| {
-                    try self.pushOperand(temp[default_operands.len - 1 - i]);
-                }
-            }
-
-            try self.popOperandsExpect(default_operands);
-            self.markUnreachable();
-        },
         .@"return" => {
             const frame = self.ctrl_stack.items[0];
             const operands = if (frame.opcode == .loop) frame.start_types else frame.end_types;
             try self.popOperandsExpect(operands);
             self.markUnreachable();
         },
+
         .@"unreachable" => self.markUnreachable(),
         .nop => {},
 
@@ -284,11 +225,11 @@ fn validateInstruction(self: *OperandValidator, instr: Instruction) !void {
         },
         .@"global.get" => |idx| {
             const global = self.context.globals.items[idx];
-            try self.pushOperand(global.val_type);
+            try self.pushOperand(global.ty);
         },
         .@"global.set" => |idx| {
             const global = self.context.globals.items[idx];
-            _ = try self.popOperandExpect(global.val_type);
+            _ = try self.popOperandExpect(global.ty);
         },
 
         // MEMORY LOAD
@@ -297,10 +238,8 @@ fn validateInstruction(self: *OperandValidator, instr: Instruction) !void {
         .@"i32.load8_u",
         .@"i32.load16_s",
         .@"i32.load16_u",
-        => {
-            _ = try self.popOperandExpect(.i32);
-            try self.pushOperand(.i32);
-        },
+        => try self.validateUnaryOp(.i32, .i32),
+
         .@"i64.load",
         .@"i64.load8_s",
         .@"i64.load8_u",
@@ -308,24 +247,20 @@ fn validateInstruction(self: *OperandValidator, instr: Instruction) !void {
         .@"i64.load16_u",
         .@"i64.load32_s",
         .@"i64.load32_u",
-        => {
-            _ = try self.popOperandExpect(.i32);
-            try self.pushOperand(.i64);
-        },
-        .@"f32.load" => {
-            _ = try self.popOperandExpect(.i32);
-            try self.pushOperand(.f32);
-        },
-        .@"f64.load" => {
-            _ = try self.popOperandExpect(.i32);
-            try self.pushOperand(.f64);
-        },
+        => try self.validateUnaryOp(.i32, .i64),
+
+        .@"f32.load" => try self.validateUnaryOp(.i32, .f32),
+        .@"f64.load" => try self.validateUnaryOp(.i32, .f64),
 
         // MEMORY STORE
-        .@"i32.store", .@"i32.store8", .@"i32.store16" => {
+        .@"i32.store",
+        .@"i32.store8",
+        .@"i32.store16",
+        => {
             _ = try self.popOperandExpect(.i32);
             _ = try self.popOperandExpect(.i32);
         },
+
         .@"i64.store",
         .@"i64.store8",
         .@"i64.store16",
@@ -345,10 +280,7 @@ fn validateInstruction(self: *OperandValidator, instr: Instruction) !void {
 
         // MEMORY SIZE / GROW
         .@"memory.size" => try self.pushOperand(.i32),
-        .@"memory.grow" => {
-            _ = try self.popOperandExpect(.i32);
-            try self.pushOperand(.i32);
-        },
+        .@"memory.grow" => try self.validateUnaryOp(.i32, .i32),
 
         // CONSTANTS
         .@"i32.const" => try self.pushOperand(.i32),
@@ -357,15 +289,9 @@ fn validateInstruction(self: *OperandValidator, instr: Instruction) !void {
         .@"f64.const" => try self.pushOperand(.f64),
 
         // NUMERIC OPS
-        .@"i32.eqz" => {
-            _ = try self.popOperandExpect(.i32);
-            try self.pushOperand(.i32);
-        },
+        .@"i32.eqz" => try self.validateUnaryOp(.i32, .i32),
+        .@"i64.eqz" => try self.validateUnaryOp(.i64, .i32),
 
-        .@"i64.eqz" => {
-            _ = try self.popOperandExpect(.i64);
-            try self.pushOperand(.i32);
-        },
         .@"i32.eq",
         .@"i32.ne",
         .@"i32.lt_s",
@@ -376,11 +302,8 @@ fn validateInstruction(self: *OperandValidator, instr: Instruction) !void {
         .@"i32.le_u",
         .@"i32.ge_s",
         .@"i32.ge_u",
-        => {
-            _ = try self.popOperandExpect(.i32);
-            _ = try self.popOperandExpect(.i32);
-            try self.pushOperand(.i32);
-        },
+        => try self.validateBinaryOp(.i32, .i32, .i32),
+
         .@"i64.eq",
         .@"i64.ne",
         .@"i64.lt_s",
@@ -391,41 +314,34 @@ fn validateInstruction(self: *OperandValidator, instr: Instruction) !void {
         .@"i64.le_u",
         .@"i64.ge_s",
         .@"i64.ge_u",
-        => {
-            _ = try self.popOperandExpect(.i64);
-            _ = try self.popOperandExpect(.i64);
-            try self.pushOperand(.i32);
-        },
+        => try self.validateBinaryOp(.i64, .i64, .i32),
+
         .@"f32.eq",
         .@"f32.ne",
         .@"f32.lt",
         .@"f32.gt",
         .@"f32.le",
         .@"f32.ge",
-        => {
-            _ = try self.popOperandExpect(.f32);
-            _ = try self.popOperandExpect(.f32);
-            try self.pushOperand(.i32);
-        },
+        => try self.validateBinaryOp(.f32, .f32, .i32),
+
         .@"f64.eq",
         .@"f64.ne",
         .@"f64.lt",
         .@"f64.gt",
         .@"f64.le",
         .@"f64.ge",
-        => {
-            _ = try self.popOperandExpect(.f64);
-            _ = try self.popOperandExpect(.f64);
-            try self.pushOperand(.i32);
-        },
-        .@"i32.clz", .@"i32.ctz", .@"i32.popcnt" => {
-            _ = try self.popOperandExpect(.i32);
-            try self.pushOperand(.i32);
-        },
-        .@"i64.clz", .@"i64.ctz", .@"i64.popcnt" => {
-            _ = try self.popOperandExpect(.i64);
-            try self.pushOperand(.i64);
-        },
+        => try self.validateBinaryOp(.f64, .f64, .i32),
+
+        .@"i32.clz",
+        .@"i32.ctz",
+        .@"i32.popcnt",
+        => try self.validateUnaryOp(.i32, .i32),
+
+        .@"i64.clz",
+        .@"i64.ctz",
+        .@"i64.popcnt",
+        => try self.validateUnaryOp(.i64, .i64),
+
         .@"f32.abs",
         .@"f32.neg",
         .@"f32.ceil",
@@ -433,10 +349,8 @@ fn validateInstruction(self: *OperandValidator, instr: Instruction) !void {
         .@"f32.trunc",
         .@"f32.nearest",
         .@"f32.sqrt",
-        => {
-            _ = try self.popOperandExpect(.f32);
-            try self.pushOperand(.f32);
-        },
+        => try self.validateUnaryOp(.f32, .f32),
+
         .@"f64.abs",
         .@"f64.neg",
         .@"f64.ceil",
@@ -444,10 +358,8 @@ fn validateInstruction(self: *OperandValidator, instr: Instruction) !void {
         .@"f64.trunc",
         .@"f64.nearest",
         .@"f64.sqrt",
-        => {
-            _ = try self.popOperandExpect(.f64);
-            try self.pushOperand(.f64);
-        },
+        => try self.validateUnaryOp(.f64, .f64),
+
         .@"i32.add",
         .@"i32.sub",
         .@"i32.mul",
@@ -463,11 +375,8 @@ fn validateInstruction(self: *OperandValidator, instr: Instruction) !void {
         .@"i32.shr_u",
         .@"i32.rotl",
         .@"i32.rotr",
-        => {
-            _ = try self.popOperandExpect(.i32);
-            _ = try self.popOperandExpect(.i32);
-            try self.pushOperand(.i32);
-        },
+        => try self.validateBinaryOp(.i32, .i32, .i32),
+
         .@"i64.add",
         .@"i64.sub",
         .@"i64.mul",
@@ -483,11 +392,8 @@ fn validateInstruction(self: *OperandValidator, instr: Instruction) !void {
         .@"i64.shr_u",
         .@"i64.rotl",
         .@"i64.rotr",
-        => {
-            _ = try self.popOperandExpect(.i64);
-            _ = try self.popOperandExpect(.i64);
-            try self.pushOperand(.i64);
-        },
+        => try self.validateBinaryOp(.i64, .i64, .i64),
+
         .@"f32.add",
         .@"f32.sub",
         .@"f32.mul",
@@ -495,11 +401,8 @@ fn validateInstruction(self: *OperandValidator, instr: Instruction) !void {
         .@"f32.min",
         .@"f32.max",
         .@"f32.copysign",
-        => {
-            _ = try self.popOperandExpect(.f32);
-            _ = try self.popOperandExpect(.f32);
-            try self.pushOperand(.f32);
-        },
+        => try self.validateBinaryOp(.f32, .f32, .f32),
+
         .@"f64.add",
         .@"f64.sub",
         .@"f64.mul",
@@ -507,79 +410,127 @@ fn validateInstruction(self: *OperandValidator, instr: Instruction) !void {
         .@"f64.min",
         .@"f64.max",
         .@"f64.copysign",
-        => {
-            _ = try self.popOperandExpect(.f64);
-            _ = try self.popOperandExpect(.f64);
-            try self.pushOperand(.f64);
-        },
+        => try self.validateBinaryOp(.f64, .f64, .f64),
 
         // CONVERSIONS
-        .@"i32.wrap_i64" => {
-            _ = try self.popOperandExpect(.i64);
-            try self.pushOperand(.i32);
-        },
-        .@"i32.trunc_f32_s", .@"i32.trunc_f32_u" => {
-            _ = try self.popOperandExpect(.f32);
-            try self.pushOperand(.i32);
-        },
-        .@"i32.trunc_f64_s", .@"i32.trunc_f64_u" => {
-            _ = try self.popOperandExpect(.f64);
-            try self.pushOperand(.i32);
-        },
-        .@"i64.extend_i32_s", .@"i64.extend_i32_u" => {
-            _ = try self.popOperandExpect(.i32);
-            try self.pushOperand(.i64);
-        },
-        .@"i64.trunc_f32_s", .@"i64.trunc_f32_u" => {
-            _ = try self.popOperandExpect(.f32);
-            try self.pushOperand(.i64);
-        },
-        .@"i64.trunc_f64_s", .@"i64.trunc_f64_u" => {
-            _ = try self.popOperandExpect(.f64);
-            try self.pushOperand(.i64);
-        },
+        .@"i32.wrap_i64" => try self.validateUnaryOp(.i64, .i32),
 
-        .@"f32.convert_i32_s", .@"f32.convert_i32_u" => {
-            _ = try self.popOperandExpect(.i32);
-            try self.pushOperand(.f32);
-        },
-        .@"f32.convert_i64_s", .@"f32.convert_i64_u" => {
-            _ = try self.popOperandExpect(.i64);
-            try self.pushOperand(.f32);
-        },
-        .@"f32.demote_f64" => {
-            _ = try self.popOperandExpect(.f64);
-            try self.pushOperand(.f32);
-        },
+        .@"i32.trunc_f32_s",
+        .@"i32.trunc_f32_u",
+        => try self.validateUnaryOp(.f32, .i32),
 
-        .@"f64.convert_i32_s", .@"f64.convert_i32_u" => {
-            _ = try self.popOperandExpect(.i32);
-            try self.pushOperand(.f64);
-        },
-        .@"f64.convert_i64_s", .@"f64.convert_i64_u" => {
-            _ = try self.popOperandExpect(.i64);
-            try self.pushOperand(.f64);
-        },
-        .@"f64.promote_f32" => {
-            _ = try self.popOperandExpect(.f32);
-            try self.pushOperand(.f64);
-        },
+        .@"i32.trunc_f64_s",
+        .@"i32.trunc_f64_u",
+        => try self.validateUnaryOp(.f64, .i32),
 
-        .@"i32.reinterpret_f32" => {
-            _ = try self.popOperandExpect(.f32);
-            try self.pushOperand(.i32);
-        },
-        .@"i64.reinterpret_f64" => {
-            _ = try self.popOperandExpect(.f64);
-            try self.pushOperand(.i64);
-        },
-        .@"f32.reinterpret_i32" => {
-            _ = try self.popOperandExpect(.i32);
-            try self.pushOperand(.f32);
-        },
-        .@"f64.reinterpret_i64" => {
-            _ = try self.popOperandExpect(.i64);
-            try self.pushOperand(.f64);
-        },
+        .@"i64.extend_i32_s",
+        .@"i64.extend_i32_u",
+        => try self.validateUnaryOp(.i32, .i64),
+
+        .@"i64.trunc_f32_s",
+        .@"i64.trunc_f32_u",
+        => try self.validateUnaryOp(.f32, .i64),
+
+        .@"i64.trunc_f64_s",
+        .@"i64.trunc_f64_u",
+        => try self.validateUnaryOp(.f64, .i64),
+
+        .@"f32.convert_i32_s",
+        .@"f32.convert_i32_u",
+        => try self.validateUnaryOp(.i32, .f32),
+
+        .@"f32.convert_i64_s",
+        .@"f32.convert_i64_u",
+        => try self.validateUnaryOp(.i64, .f32),
+
+        .@"f32.demote_f64" => try self.validateUnaryOp(.f64, .f32),
+
+        .@"f64.convert_i32_s",
+        .@"f64.convert_i32_u",
+        => try self.validateUnaryOp(.i32, .f64),
+
+        .@"f64.convert_i64_s",
+        .@"f64.convert_i64_u",
+        => try self.validateUnaryOp(.i64, .f64),
+
+        .@"f64.promote_f32" => try self.validateUnaryOp(.f32, .f64),
+
+        .@"i32.reinterpret_f32" => try self.validateUnaryOp(.f32, .i32),
+        .@"i64.reinterpret_f64" => try self.validateUnaryOp(.f64, .i64),
+        .@"f32.reinterpret_i32" => try self.validateUnaryOp(.i32, .f32),
+        .@"f64.reinterpret_i64" => try self.validateUnaryOp(.i64, .f64),
     }
+}
+
+pub fn validateBlockTypeOp(self: *OperandValidator, opcode: Opcode, block: instr.BlockType) !void {
+    std.debug.assert(opcode == .block or opcode == .loop or opcode == .@"if");
+
+    const operands = switch (block) {
+        .empty => &[_]ValType{},
+        .valtype => &[_]ValType{block.valtype},
+    };
+    try self.pushControlFrame(opcode, operands, operands);
+}
+
+pub fn validateBr(self: *OperandValidator, label: u32) !void {
+    if (label >= self.ctrl_stack.items.len) return error.ValidateBrInvalidLabel;
+    const frame = self.ctrl_stack.items[self.ctrl_stack.items.len - 1 - label];
+
+    const operands = if (frame.opcode == .loop) frame.start_types else frame.end_types;
+    _ = try self.popOperandsExpect(operands);
+    self.markUnreachable();
+}
+
+pub fn validateBrIf(self: *OperandValidator, label: u32) !void {
+    if (label >= self.ctrl_stack.items.len) return error.ValidateBrIfInvalidLabel;
+    const frame = self.ctrl_stack.items[self.ctrl_stack.items.len - 1 - label];
+
+    const operands = if (frame.opcode == .loop) frame.start_types else frame.end_types;
+    _ = try self.popOperandExpect(.i32);
+    _ = try self.popOperandsExpect(operands);
+    try self.pushOperands(operands);
+}
+
+pub fn validateBrTable(self: *OperandValidator, table: instr.BrTable) !void {
+    _ = try self.popOperandExpect(.i32);
+    if (table.labels.count >= self.ctrl_stack.items.len) return error.ValidateBrTableInvalidLabel;
+
+    const default_label = table.default_label;
+    const frame = self.ctrl_stack.items[self.ctrl_stack.items.len - 1 - default_label];
+
+    const default_operands = if (frame.opcode == .loop) frame.start_types else frame.end_types;
+
+    var it = table.labels.iter();
+    while (try it.next()) |label| {
+        if (label >= self.ctrl_stack.items.len) return error.ValidateBrTableInvalidLabelN;
+        const frame_n = self.ctrl_stack.items[self.ctrl_stack.items.len - 1 - label];
+
+        const operands = if (frame_n.opcode == .loop) frame_n.start_types else frame_n.end_types;
+        if (operands.len != default_operands.len) return error.ValidateBrTableInvalidLabelWrongArity;
+
+        if (default_operands.len > 64) return error.TODOAllocation;
+
+        var temp = [_]ValType{.i32} ** 64;
+        for (operands, 0..) |_, i| {
+            temp[i] = try self.popOperandExpect(operands[default_operands.len - i - 1]);
+        }
+
+        for (operands, 0..) |_, i| {
+            try self.pushOperand(temp[default_operands.len - 1 - i]);
+        }
+    }
+
+    try self.popOperandsExpect(default_operands);
+    self.markUnreachable();
+}
+
+pub fn validateUnaryOp(self: *OperandValidator, operand: ValType, result: ValType) !void {
+    _ = try self.popOperandExpect(operand);
+    try self.pushOperand(result);
+}
+
+pub fn validateBinaryOp(self: *OperandValidator, left: ValType, right: ValType, result: ValType) !void {
+    _ = try self.popOperandExpect(left);
+    _ = try self.popOperandExpect(right);
+    try self.pushOperand(result);
 }

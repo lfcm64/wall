@@ -1,7 +1,7 @@
 const std = @import("std");
 const clap = @import("clap");
 
-const Validator = @import("validation/Validator.zig");
+const Validator = @import("parser/Validator.zig");
 
 pub fn main() !void {
     var gpa = std.heap.DebugAllocator(.{}){};

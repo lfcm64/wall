@@ -32,7 +32,9 @@ pub fn Section(comptime section_type: SectionType) type {
         .memory => SectionLimited(types.Memory, types.Memory.fromReader),
         .global => SectionLimited(types.Global, types.Global.fromReader),
         .@"export" => SectionLimited(types.Export, types.Export.fromReader),
-        .start => indices.FuncIdx,
+        .start => struct {
+            func_idx: indices.FuncIdx,
+        },
         .elem => SectionLimited(types.Element, types.Element.fromReader),
         .code => SectionLimited(types.FuncBody, types.FuncBody.fromReader),
         .data => SectionLimited(types.Segment, types.Segment.fromReader),
@@ -58,14 +60,17 @@ pub fn SectionLimited(comptime T: type, read: *const fn (*io.Reader) anyerror!T)
 
         pub fn visit(self: *const Self, visitor: Visitor) !void {
             var it = self.iter();
+            var i: u32 = 0;
+
             while (try it.next()) |item| {
-                try visitor.visit(visitor.ptr, item);
+                try visitor.visit(visitor.ptr, item, i);
+                i += 1;
             }
         }
 
         pub const Visitor = struct {
             ptr: *anyopaque,
-            visit: *const fn (*anyopaque, T) anyerror!void,
+            visit: *const fn (*anyopaque, T, u32) anyerror!void,
         };
 
         pub fn iter(self: *const Self) Iterator {

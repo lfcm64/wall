@@ -70,7 +70,19 @@ pub const Limits = struct {
 };
 
 pub const Memory = Limits;
-pub const Table = Limits;
+
+pub const Table = struct {
+    limits: Limits,
+
+    pub fn fromReader(reader: *io.Reader) !Table {
+        const limits = try Limits.fromReader(reader);
+
+        const funcref = try reader.takeByte();
+        if (funcref != 0x70) return error.InvalidElemType;
+
+        return .{ .limits = limits };
+    }
+};
 
 pub const Local = struct {
     count: u32,
@@ -262,19 +274,19 @@ pub const Element = struct {
 };
 
 pub const Segment = struct {
-    memory_idx: indices.MemIdx,
+    mem_idx: indices.MemIdx,
     offset: Expr,
     bytes: []const u8,
 
     pub fn fromReader(reader: *io.Reader) !Segment {
-        const memory_idx = try reader.takeLeb128(u32);
+        const mem_idx = try reader.takeLeb128(u32);
         const offset = try Expr.fromReader(reader);
 
         const bytes_size = try reader.takeLeb128(u32);
         const bytes: []const u8 = @ptrCast(try reader.take(bytes_size));
 
         return Segment{
-            .memory_idx = memory_idx,
+            .mem_idx = mem_idx,
             .offset = offset,
             .bytes = bytes,
         };

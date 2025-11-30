@@ -47,7 +47,7 @@ pub fn addExport(self: *Context, allocator: Allocator, exp: types.Export) !void 
 }
 
 pub fn addImport(self: *Context, allocator: Allocator, import: types.Import) !void {
-    switch (import.kind) {
+    switch (import.desc) {
         .func => |func| try self.addFunc(allocator, func),
         .global => |global| try self.globals.append(allocator, global),
         .memory => |mem| try self.addMemory(allocator, mem),

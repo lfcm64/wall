@@ -3,10 +3,11 @@ const Validator = @This();
 const std = @import("std");
 const sections = @import("../core/sections.zig");
 const types = @import("../core/types.zig");
+const indices = @import("../core/indices.zig");
 
 const Parser = @import("Parser.zig");
 const Context = @import("Context.zig");
-//const OperandValidator = @import("Operand.zig");
+const OperandValidator = @import("Operand.zig");
 
 const Allocator = std.mem.Allocator;
 const Payload = Parser.Payload;
@@ -33,18 +34,18 @@ pub fn validateNext(self: *Validator) !void {
             if (header.magic != 0x6D736100) return error.WASMMagicError;
             if (header.version != 1) return error.VersionMismatch;
         },
-        //.custom_section => {},
-        //.type_section => |section| try self.validateTypeSection(section),
-        //.import_section => |section| try self.validateImportSection(section),
-        //.function_section => |section| try self.validateFuncSection(section),
-        //.table_section => |section| try self.validateTableSection(section),
-        //.memory_section => |section| try self.validateMemorySection(section),
-        //.export_section => |section| try self.validateExportSection(section),
-        //.start_section => |section| try self.validateStartSection(section),
-        //.element_section => |section| try self.validateElementSection(section),
-        //.code_section => |section| try self.validateCodeSection(section),
-        //.data_section => |section| try self.validateDataSection(section),
-        else => {},
+        .custom_section => {},
+        .type_section => |section| try self.validateTypeSection(section),
+        .import_section => |section| try self.validateImportSection(section),
+        .function_section => |section| try self.validateFuncSection(section),
+        .table_section => |section| try self.validateTableSection(section),
+        .memory_section => |section| try self.validateMemorySection(section),
+        .global_section => |section| try self.validateGlobalSection(section),
+        .export_section => |section| try self.validateExportSection(section),
+        .start_section => |section| try self.validateStartSection(section),
+        .element_section => |section| try self.validateElementSection(section),
+        .code_section => |section| try self.validateCodeSection(section),
+        .data_section => |section| try self.validateDataSection(section),
     };
 }
 
@@ -52,7 +53,7 @@ fn validateTypeSection(self: *Validator, section: Section(.type)) !void {
     const visitor = Section(.type).Visitor{
         .ptr = self,
         .visit = struct {
-            fn visit(ctx: *anyopaque, functype: types.Function.Type, _: u32) anyerror!void {
+            fn visit(ctx: *anyopaque, functype: types.FuncType, _: u32) anyerror!void {
                 const v: *Validator = @ptrCast(@alignCast(ctx));
                 try v.context.addFuncType(v.allocator, functype);
             }
@@ -78,11 +79,11 @@ fn validateFuncSection(self: *Validator, section: Section(.func)) !void {
     const visitor = Section(.func).Visitor{
         .ptr = self,
         .visit = struct {
-            fn visit(ctx: *anyopaque, func: types.primitives.VarU32, _: u32) anyerror!void {
+            fn visit(ctx: *anyopaque, func: indices.FuncIdx, _: u32) anyerror!void {
                 const v: *Validator = @ptrCast(@alignCast(ctx));
-                if (v.context.funcTypeCount() <= func.val) return error.FuncIndexOutOfBounds;
+                if (v.context.funcTypeCount() <= func) return error.FuncIndexOutOfBounds;
 
-                try v.context.addFunc(v.allocator, func.val);
+                try v.context.addFunc(v.allocator, func);
             }
         }.visit,
     };
@@ -121,6 +122,25 @@ fn validateGlobalSection(self: *Validator, section: Section(.global)) !void {
         .visit = struct {
             fn visit(ctx: *anyopaque, global: types.Global, _: u32) anyerror!void {
                 const v: *Validator = @ptrCast(@alignCast(ctx));
+
+                const init_expr = global.init_expr;
+
+                switch (global.ty.ty) {
+                    .i32 => {
+                        switch (init_expr) {
+                            .i32 => {},
+                            .global => |src_idx| {
+                                const src_global = v.context.globals.items[src_idx];
+                                if (src_global.mut == .@"var") return error.MutableGlobalNotAllowed;
+                                if (src_global.ty != .i32) return error.InitExprTypeMismatch;
+                            },
+                            else => return error.InitExprTypeMismatch,
+                        }
+                    },
+                    .i64 => if (init_expr != .i64) return error.InitExprTypeMismatch,
+                    .f32 => if (init_expr != .f32) return error.InitExprTypeMismatch,
+                    .f64 => if (init_expr != .f64) return error.InitExprTypeMismatch,
+                }
                 try v.context.addGlobal(v.allocator, global);
             }
         }.visit,
@@ -148,24 +168,45 @@ fn validateExportSection(self: *Validator, section: Section(.@"export")) !void {
 }
 
 fn validateStartSection(self: *Validator, section: Section(.start)) !void {
-    if (self.context.funcCount() <= section.val) return error.FuncIndexOutOfBounds;
+    if (self.context.funcCount() <= section.func_idx) return error.FuncIndexOutOfBounds;
 }
 
 fn validateElementSection(self: *Validator, section: Section(.elem)) !void {
-    _ = self;
-    _ = section;
+    const visitor = Section(.elem).Visitor{
+        .ptr = self,
+        .visit = struct {
+            fn visit(ctx: *anyopaque, elem: types.Element, _: u32) anyerror!void {
+                const v: *Validator = @ptrCast(@alignCast(ctx));
+                if (elem.table_idx >= v.context.tableCount()) return error.TableIndexOutOfBounds;
+
+                switch (elem.offset) {
+                    .i32, .global => {},
+                    else => return error.InvalidOffsetConstExpr,
+                }
+                var it = elem.indices.iter();
+                while (try it.next()) |idx| {
+                    if (idx >= v.context.funcCount()) return error.FuncIndexOutOfBounds;
+                }
+            }
+        }.visit,
+    };
+    try section.visit(visitor);
 }
 
 fn validateCodeSection(self: *Validator, section: Section(.code)) !void {
     const visitor = Section(.code).Visitor{
         .ptr = self,
         .visit = struct {
-            fn visit(ctx: *anyopaque, _: types.Function, _: u32) anyerror!void {
+            fn visit(ctx: *anyopaque, body: types.FuncBody, idx: u32) anyerror!void {
                 const v: *Validator = @ptrCast(@alignCast(ctx));
-                _ = v;
-                //var operand = try OperandValidator.init(v.allocator, &v.context, body, idx);
-                //defer operand.deinit();
-                //try operand.validate();
+                var operand = try OperandValidator.init(
+                    v.allocator,
+                    &v.context,
+                    body,
+                    idx,
+                );
+                defer operand.deinit();
+                try operand.validate();
             }
         }.visit,
     };
@@ -173,6 +214,26 @@ fn validateCodeSection(self: *Validator, section: Section(.code)) !void {
 }
 
 fn validateDataSection(self: *Validator, section: Section(.data)) !void {
-    _ = self;
-    _ = section;
+    const visitor = Section(.data).Visitor{
+        .ptr = self,
+        .visit = struct {
+            fn visit(ctx: *anyopaque, data: types.Segment, _: u32) anyerror!void {
+                const v: *Validator = @ptrCast(@alignCast(ctx));
+                if (data.mem_idx >= v.context.memoryCount()) return error.MemoryIndexOutOfBounds;
+
+                switch (data.offset) {
+                    .i32 => {},
+                    .global => |idx| {
+                        if (idx >= v.context.globalCount()) return error.GlobalIndexOutOfBounds;
+
+                        const global = v.context.globals.items[idx];
+                        if (global.ty != .i32) return error.OffsetExprMustBeI32;
+                        if (global.mut == .@"var") return error.OffsetExprGlobalMustBeImmutable;
+                    },
+                    else => return error.InvalidOffsetConstExpr,
+                }
+            }
+        }.visit,
+    };
+    try section.visit(visitor);
 }

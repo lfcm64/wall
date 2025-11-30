@@ -16,7 +16,6 @@ pub const Payload = union(enum) {
         magic: u32,
         version: u32,
     },
-
     custom_section: Section(.custom),
     type_section: Section(.type),
     import_section: Section(.import),
@@ -85,7 +84,7 @@ pub fn parseNext(self: *Parser) !?Payload {
         },
         .start => {
             const func_idx = try reader.takeLeb128(u32);
-            return Payload{ .start_section = func_idx };
+            return Payload{ .start_section = .{ .func_idx = func_idx } };
         },
         inline else => |ty| {
             const info = @typeInfo(Payload);
