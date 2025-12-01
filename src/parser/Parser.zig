@@ -10,6 +10,8 @@ const Allocator = std.mem.Allocator;
 
 const Section = sections.Section;
 
+const log = std.log.scoped(.parser);
+
 bytes: []const u8,
 
 reader: io.Reader,
@@ -60,13 +62,15 @@ pub fn reset(self: *Parser) void {
     self.state = .header;
 }
 
-pub fn next(self: *Parser) !?Payload {
+pub fn parseNext(self: *Parser) !?Payload {
     switch (self.state) {
         .not_started => {
             const magic = try self.reader.takeInt(u32, .little);
             const version = try self.reader.takeInt(u32, .little);
 
+            log.info("module header parsed", .{});
             self.state = .header;
+
             return .{ .ModuleHeader = .{
                 .magic = magic,
                 .version = version,
@@ -77,13 +81,13 @@ pub fn next(self: *Parser) !?Payload {
                 self.state = .finished;
                 return null;
             }
-            return self.nextSection();
+            return self.parseNextSection();
         },
         .finished => return null,
     }
 }
 
-fn nextSection(self: *Parser) !?Payload {
+fn parseNextSection(self: *Parser) !?Payload {
     std.debug.assert(self.state == .header or self.state == .section);
 
     const section_type: sections.SectionType = @enumFromInt(try self.reader.takeByte());
@@ -91,6 +95,8 @@ fn nextSection(self: *Parser) !?Payload {
 
     const bytes = try self.reader.take(section_size);
     self.state = .{ .section = section_type };
+
+    log.info("{} section parsed", .{section_type});
 
     switch (section_type) {
         .custom => return .{ .CustomSection = {} },

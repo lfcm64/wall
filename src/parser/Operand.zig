@@ -23,6 +23,8 @@ const ControlFrame = struct {
     unreachable_flag: bool = false,
 };
 
+const log = std.log.scoped(.operand_validator);
+
 allocator: Allocator,
 reader: io.Reader,
 
@@ -39,7 +41,7 @@ pub fn init(allocator: Allocator, context: *Context, func: types.FuncBody, func_
     const locals = try func.locals.collect(allocator);
 
     var expended: std.ArrayList(ValType) = .{};
-    for (locals) |loc| try expended.appendNTimes(allocator, loc.ty, loc.count);
+    for (locals) |loc| try expended.appendNTimes(allocator, loc.valtype, loc.count);
 
     var ctrl_stack: ControlStack = .{};
     try ctrl_stack.append(
@@ -67,13 +69,16 @@ pub fn deinit(self: *OperandValidator) void {
 }
 
 pub fn validate(self: *OperandValidator) !void {
+    log.info("validating new function...", .{});
     while (self.reader.seek < self.reader.buffer.len) {
         const instruction = try Instruction.fromReader(&self.reader);
         try self.validateInstruction(instruction);
     }
+    log.info("function validated", .{});
 }
 
 fn pushOperand(self: *OperandValidator, ty: ValType) !void {
+    log.debug("pushing {} in op_stack, stack size: {}", .{ ty, self.op_stack.items.len });
     try self.op_stack.append(self.allocator, ty);
 }
 
@@ -85,14 +90,15 @@ fn pushOperands(self: *OperandValidator, operands: []const ValType) !void {
 
 fn popOperand(self: *OperandValidator) !ValType {
     if (self.op_stack.items.len == 0) return error.StackUnderflow;
-    return self.op_stack.pop().?;
+    const ty = self.op_stack.pop().?;
+    log.debug("poping {} in op_stack, stack size: {}", .{ ty, self.op_stack.items.len });
+    return ty;
 }
 
 fn popOperandExpect(self: *OperandValidator, expected: ValType) !ValType {
-    const t = try self.popOperand();
-    if (t != expected) return error.TypeMismatch;
-
-    return t;
+    const ty = try self.popOperand();
+    if (ty != expected) return error.TypeMismatch;
+    return ty;
 }
 
 fn popOperandsExpect(self: *OperandValidator, operands: []const ValType) !void {
@@ -139,6 +145,7 @@ fn getLocal(self: *OperandValidator, n: usize) !ValType {
 }
 
 fn validateInstruction(self: *OperandValidator, instruction: Instruction) !void {
+    log.debug("validating {s} instruction", .{@tagName(instruction)});
     switch (instruction) {
         // CONTROL
         .block => |block| try self.validateBlockTypeOp(.block, block),
@@ -213,11 +220,11 @@ fn validateInstruction(self: *OperandValidator, instruction: Instruction) !void 
         },
         .@"global.get" => |idx| {
             const global = try self.context.getGlobal(idx);
-            try self.pushOperand(global.ty);
+            try self.pushOperand(global.valtype);
         },
         .@"global.set" => |idx| {
             const global = try self.context.getGlobal(idx);
-            _ = try self.popOperandExpect(global.ty);
+            _ = try self.popOperandExpect(global.valtype);
         },
 
         // MEMORY LOAD

@@ -86,26 +86,26 @@ pub const Table = struct {
 
 pub const Local = struct {
     count: u32,
-    ty: ValType,
+    valtype: ValType,
 
     pub fn fromReader(reader: *io.Reader) !Local {
         return .{
             .count = try reader.takeLeb128(u32),
-            .ty = @enumFromInt(try reader.takeByte()),
+            .valtype = @enumFromInt(try reader.takeByte()),
         };
     }
 };
 
 pub const GlobalType = struct {
-    ty: ValType,
+    valtype: ValType,
     mut: Mutability,
 
     pub fn fromReader(reader: *io.Reader) !GlobalType {
-        const ty: ValType = @enumFromInt(try reader.takeByte());
+        const valtype: ValType = @enumFromInt(try reader.takeByte());
         const mut: Mutability = @enumFromInt(try reader.takeByte());
 
         return .{
-            .ty = ty,
+            .valtype = valtype,
             .mut = mut,
         };
     }
