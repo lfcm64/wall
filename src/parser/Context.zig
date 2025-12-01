@@ -1,9 +1,7 @@
 const Context = @This();
-
 const std = @import("std");
 const types = @import("../core/types.zig");
 const indices = @import("../core/indices.zig");
-
 const Allocator = std.mem.Allocator;
 
 functypes: std.ArrayList(types.FuncType) = .{},
@@ -11,14 +9,23 @@ funcs: std.ArrayList(indices.FuncIdx) = .{},
 tables: std.ArrayList(types.Table) = .{},
 memories: std.ArrayList(types.Memory) = .{},
 globals: std.ArrayList(types.GlobalType) = .{},
-
 exports: std.StringArrayHashMapUnmanaged(types.Export) = .{},
+
+pub const IndexError = error{
+    FuncTypeIndexOutOfBounds,
+    FuncIndexOutOfBounds,
+    TableIndexOutOfBounds,
+    MemoryIndexOutOfBounds,
+    GlobalIndexOutOfBounds,
+    ExportNotFound,
+};
 
 pub fn deinit(self: *Context, allocator: Allocator) void {
     self.functypes.deinit(allocator);
     self.funcs.deinit(allocator);
     self.tables.deinit(allocator);
     self.memories.deinit(allocator);
+    self.globals.deinit(allocator);
     self.exports.deinit(allocator);
 }
 
@@ -55,11 +62,52 @@ pub fn addImport(self: *Context, allocator: Allocator, import: types.Import) !vo
     }
 }
 
-pub fn getFuncTypeByFuncIdx(self: *const Context, idx: u32) types.FuncType {
-    const func_type_idx = self.funcs.items[idx];
-    return self.functypes.items[func_type_idx];
+// Getter functions
+pub fn getFuncType(self: *const Context, idx: u32) IndexError!types.FuncType {
+    if (idx >= self.functypes.items.len) {
+        return IndexError.FuncTypeIndexOutOfBounds;
+    }
+    return self.functypes.items[idx];
 }
 
+pub fn getFunc(self: *const Context, idx: u32) IndexError!indices.FuncIdx {
+    if (idx >= self.funcs.items.len) {
+        return IndexError.FuncIndexOutOfBounds;
+    }
+    return self.funcs.items[idx];
+}
+
+pub fn getTable(self: *const Context, idx: u32) IndexError!types.Table {
+    if (idx >= self.tables.items.len) {
+        return IndexError.TableIndexOutOfBounds;
+    }
+    return self.tables.items[idx];
+}
+
+pub fn getMemory(self: *const Context, idx: u32) IndexError!types.Memory {
+    if (idx >= self.memories.items.len) {
+        return IndexError.MemoryIndexOutOfBounds;
+    }
+    return self.memories.items[idx];
+}
+
+pub fn getGlobal(self: *const Context, idx: u32) IndexError!types.GlobalType {
+    if (idx >= self.globals.items.len) {
+        return IndexError.GlobalIndexOutOfBounds;
+    }
+    return self.globals.items[idx];
+}
+
+pub fn getExport(self: *const Context, name: []const u8) IndexError!types.Export {
+    return self.exports.get(name) orelse IndexError.ExportNotFound;
+}
+
+pub fn typeOfFunc(self: *const Context, idx: u32) IndexError!types.FuncType {
+    const func_type_idx = try self.getFunc(idx);
+    return try self.getFuncType(func_type_idx);
+}
+
+// Count functions
 pub fn funcTypeCount(self: *const Context) u32 {
     return @intCast(self.functypes.items.len);
 }

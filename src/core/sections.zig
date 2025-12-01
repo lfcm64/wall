@@ -21,10 +21,7 @@ pub const SectionType = enum(u8) {
 
 pub fn Section(comptime section_type: SectionType) type {
     return switch (section_type) {
-        .custom => struct {
-            name: []const u8,
-            bytes: []const u8,
-        },
+        .custom => CustomSection,
         .type => SectionLimited(types.FuncType, types.FuncType.fromReader),
         .import => SectionLimited(types.Import, types.Import.fromReader),
         .func => SectionLimited(indices.TypeIdx, types.VarU32.fromReader),
@@ -32,9 +29,7 @@ pub fn Section(comptime section_type: SectionType) type {
         .memory => SectionLimited(types.Memory, types.Memory.fromReader),
         .global => SectionLimited(types.Global, types.Global.fromReader),
         .@"export" => SectionLimited(types.Export, types.Export.fromReader),
-        .start => struct {
-            func_idx: indices.FuncIdx,
-        },
+        .start => struct { func_idx: indices.FuncIdx },
         .elem => SectionLimited(types.Element, types.Element.fromReader),
         .code => SectionLimited(types.FuncBody, types.FuncBody.fromReader),
         .data => SectionLimited(types.Segment, types.Segment.fromReader),
@@ -43,8 +38,8 @@ pub fn Section(comptime section_type: SectionType) type {
 
 pub fn SectionLimited(comptime T: type, read: *const fn (*io.Reader) anyerror!T) type {
     return struct {
-        bytes: []const u8,
         count: u32,
+        bytes: []const u8,
 
         const Self = @This();
 
@@ -53,8 +48,8 @@ pub fn SectionLimited(comptime T: type, read: *const fn (*io.Reader) anyerror!T)
             const count = try reader.takeLeb128(u32);
 
             return .{
-                .bytes = bytes[reader.seek..],
                 .count = count,
+                .bytes = bytes[reader.seek..],
             };
         }
 
@@ -72,6 +67,19 @@ pub fn SectionLimited(comptime T: type, read: *const fn (*io.Reader) anyerror!T)
             ptr: *anyopaque,
             visit: *const fn (*anyopaque, T, u32) anyerror!void,
         };
+
+        pub fn collect(self: *const Self, allocator: std.mem.Allocator) ![]T {
+            const items = try allocator.alloc(T, self.count);
+            errdefer allocator.free(items);
+
+            var it = self.iter();
+            var i: u32 = 0;
+            while (try it.next()) |item| {
+                items[i] = item;
+                i += 1;
+            }
+            return items;
+        }
 
         pub fn iter(self: *const Self) Iterator {
             return Iterator{
@@ -94,3 +102,8 @@ pub fn SectionLimited(comptime T: type, read: *const fn (*io.Reader) anyerror!T)
         };
     };
 }
+
+pub const CustomSection = struct {
+    name: []const u8,
+    bytes: []const u8,
+};

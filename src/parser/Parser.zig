@@ -3,43 +3,56 @@ const Parser = @This();
 const std = @import("std");
 const sections = @import("../core/sections.zig");
 
+const Validator = @import("Validator.zig");
+
 const io = std.io;
+const Allocator = std.mem.Allocator;
 
 const Section = sections.Section;
 
 bytes: []const u8,
+
 reader: io.Reader,
-state: State = .header,
+validator: Validator,
+
+state: State = .not_started,
 
 pub const Payload = union(enum) {
-    module_header: struct {
+    ModuleHeader: struct {
         magic: u32,
         version: u32,
     },
-    custom_section: Section(.custom),
-    type_section: Section(.type),
-    import_section: Section(.import),
-    function_section: Section(.func),
-    table_section: Section(.table),
-    memory_section: Section(.memory),
-    global_section: Section(.global),
-    export_section: Section(.@"export"),
-    start_section: Section(.start),
-    element_section: Section(.elem),
-    code_section: Section(.code),
-    data_section: Section(.data),
+    CustomSection,
+    TypeSection: Section(.type),
+    ImportSection: Section(.import),
+    FuncSection: Section(.func),
+    TableSection: Section(.table),
+    MemorySection: Section(.memory),
+    GlobalSection: Section(.global),
+    ExportSection: Section(.@"export"),
+    StartSection: Section(.start),
+    ElementSection: Section(.elem),
+    CodeSection: Section(.code),
+    DataSection: Section(.data),
 };
 
-pub const State = enum {
+pub const State = union(enum) {
+    not_started,
     header,
-    section,
+    section: sections.SectionType,
+    finished,
 };
 
-pub fn init(bytes: []const u8) Parser {
+pub fn init(allocator: Allocator, bytes: []const u8) Parser {
     return .{
         .bytes = bytes,
         .reader = io.Reader.fixed(bytes),
+        .validator = Validator.init(allocator),
     };
+}
+
+pub fn deinit(self: *Parser) void {
+    self.validator.deinit();
 }
 
 pub fn reset(self: *Parser) void {
@@ -47,53 +60,60 @@ pub fn reset(self: *Parser) void {
     self.state = .header;
 }
 
-pub fn parseNext(self: *Parser) !?Payload {
-    const reader = &self.reader;
-    if (reader.seek == self.reader.end) return null;
+pub fn next(self: *Parser) !?Payload {
+    switch (self.state) {
+        .not_started => {
+            const magic = try self.reader.takeInt(u32, .little);
+            const version = try self.reader.takeInt(u32, .little);
 
-    if (self.state == .header) {
-        self.state = .section;
-        return Payload{
-            .module_header = .{
-                .magic = try reader.takeInt(u32, .little),
-                .version = try reader.takeInt(u32, .little),
-            },
-        };
+            self.state = .header;
+            return .{ .ModuleHeader = .{
+                .magic = magic,
+                .version = version,
+            } };
+        },
+        .header, .section => {
+            if (self.reader.seek == self.bytes.len) {
+                self.state = .finished;
+                return null;
+            }
+            return self.nextSection();
+        },
+        .finished => return null,
     }
+}
 
-    const section_type: sections.SectionType = @enumFromInt(try reader.takeByte());
-    const size = try reader.takeLeb128(u32);
+fn nextSection(self: *Parser) !?Payload {
+    std.debug.assert(self.state == .header or self.state == .section);
 
-    const bytes = self.bytes[reader.seek..][0..size];
-    try reader.discardAll(size);
+    const section_type: sections.SectionType = @enumFromInt(try self.reader.takeByte());
+    const section_size = try self.reader.takeLeb128(u32);
+
+    const bytes = try self.reader.take(section_size);
+    self.state = .{ .section = section_type };
 
     switch (section_type) {
-        .custom => {
-            const name_size = try reader.takeLeb128(u32);
-            const name = try reader.take(name_size);
-
-            const section_bytes_size = try reader.takeLeb128(u32);
-            const section_bytes = try reader.take(section_bytes_size);
-
-            return Payload{
-                .custom_section = .{
-                    .name = name,
-                    .bytes = section_bytes,
-                },
-            };
-        },
+        .custom => return .{ .CustomSection = {} },
         .start => {
-            const func_idx = try reader.takeLeb128(u32);
-            return Payload{ .start_section = .{ .func_idx = func_idx } };
+            const func_idx = try self.reader.takeLeb128(u32);
+            const section = Section(.start){ .func_idx = func_idx };
+
+            try self.validator.validateStartSection(section);
+            return .{ .StartSection = section };
         },
         inline else => |ty| {
             const info = @typeInfo(Payload);
             const field = info.@"union".fields[@intFromEnum(ty) + 1];
 
+            const section = try Section(ty).fromBytes(bytes);
+
+            const func = @field(Validator, "validate" ++ field.name);
+            try func(&self.validator, section);
+
             return @unionInit(
                 Payload,
                 field.name,
-                try Section(ty).fromBytes(bytes),
+                section,
             );
         },
     }

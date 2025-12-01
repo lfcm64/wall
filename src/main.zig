@@ -1,7 +1,7 @@
 const std = @import("std");
 const clap = @import("clap");
 
-const Validator = @import("parser/Validator.zig");
+const Parser = @import("parser/Parser.zig");
 
 pub fn main() !void {
     var gpa = std.heap.DebugAllocator(.{}){};
@@ -27,9 +27,9 @@ pub fn main() !void {
     if (res.args.help != 0)
         std.debug.print("--help\n", .{});
     if (res.args.validate != 0) {
-        var v = Validator.init(gpa.allocator(), source);
-        defer v.deinit();
+        var p = Parser.init(gpa.allocator(), source);
+        defer p.deinit();
 
-        try v.validateNext();
+        while (try p.next()) |_| {}
     }
 }
