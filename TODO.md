@@ -1,4 +1,0 @@
-- change Section Type to be lowercase
-- import("../module/sections.zig") instead of import("../module/types.zig").sections
-- Error type for parsing
-- better printer

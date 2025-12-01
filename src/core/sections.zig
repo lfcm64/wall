@@ -29,7 +29,7 @@ pub fn Section(comptime section_type: SectionType) type {
         .memory => SectionLimited(types.Memory, types.Memory.fromReader),
         .global => SectionLimited(types.Global, types.Global.fromReader),
         .@"export" => SectionLimited(types.Export, types.Export.fromReader),
-        .start => struct { func_idx: indices.FuncIdx },
+        .start => StartSection,
         .elem => SectionLimited(types.Element, types.Element.fromReader),
         .code => SectionLimited(types.FuncBody, types.FuncBody.fromReader),
         .data => SectionLimited(types.Segment, types.Segment.fromReader),
@@ -106,4 +106,26 @@ pub fn SectionLimited(comptime T: type, read: *const fn (*io.Reader) anyerror!T)
 pub const CustomSection = struct {
     name: []const u8,
     bytes: []const u8,
+
+    pub fn fromBytes(bytes: []const u8) !CustomSection {
+        var reader = io.Reader.fixed(bytes);
+
+        const name_size = try reader.takeLeb128(u32);
+        const name = try reader.take(name_size);
+
+        const bytes_size = try reader.takeLeb128(u32);
+        return .{
+            .name = name,
+            .bytes = try reader.take(bytes_size),
+        };
+    }
+};
+
+pub const StartSection = struct {
+    func_idx: u32,
+
+    pub fn fromBytes(bytes: []const u8) !StartSection {
+        var reader = io.Reader.fixed(bytes);
+        return .{ .func_idx = try reader.takeLeb128(u32) };
+    }
 };

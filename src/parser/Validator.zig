@@ -5,6 +5,7 @@ const sections = @import("../core/sections.zig");
 const types = @import("../core/types.zig");
 const indices = @import("../core/indices.zig");
 
+const Parser = @import("Parser.zig");
 const Context = @import("Context.zig");
 const OperandValidator = @import("Operand.zig");
 
@@ -22,6 +23,10 @@ pub fn init(allocator: Allocator) Validator {
 
 pub fn deinit(self: *Validator) void {
     self.context.deinit(self.allocator);
+}
+
+pub fn handler(self: *Validator) Parser.ParsingEventHandler(Validator) {
+    return .{ .handler = self };
 }
 
 pub fn validateTypeSection(self: *Validator, section: Section(.type)) !void {

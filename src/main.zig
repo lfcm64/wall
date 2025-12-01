@@ -3,6 +3,8 @@ const clap = @import("clap");
 
 const Parser = @import("parser/Parser.zig");
 
+const Allocator = std.mem.Allocator;
+
 fn log(
     comptime level: std.log.Level,
     comptime scope: @Type(.enum_literal),
@@ -12,12 +14,11 @@ fn log(
     const level_txt = comptime level.asText();
     const prefix2 = if (scope == .default) ": " else "(" ++ @tagName(scope) ++ "): ";
     const reset = "\x1b[0m";
-
     const color = switch (level) {
-        .err => "",
-        .warn => "",
-        .info => "\x1b[36m",
-        .debug => "\x1b[34m",
+        .err => "\x1b[31m", // red
+        .warn => "\x1b[33m", // yellow
+        .info => "\x1b[36m", // cyan
+        .debug => "\x1b[34m", // blue
     };
     var buffer: [64]u8 = undefined;
     const stderr = std.debug.lockStderrWriter(&buffer);
@@ -27,15 +28,16 @@ fn log(
 
 pub const std_options = std.Options{
     .logFn = log,
+    .log_level = .info,
 };
 
 pub fn main() !void {
-    var gpa = std.heap.DebugAllocator(.{}){};
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
 
     const params = comptime clap.parseParamsComptime(
-        \\-h, --help                Display this help and exit.
-        \\-v, --validate            Validate a Wasm module.
+        \\-h, --help        Show this help.
+        \\-v, --validate <str>   Validate a Wasm module.
     );
 
     var diag = clap.Diagnostic{};
@@ -48,14 +50,20 @@ pub fn main() !void {
     };
     defer res.deinit();
 
-    const source = @embedFile("tests/fib.wasm");
-
     if (res.args.help != 0)
         std.debug.print("--help\n", .{});
-    if (res.args.validate != 0) {
-        var p = Parser.init(gpa.allocator(), source);
-        defer p.deinit();
+    if (res.args.validate) |file_path|
+        try validateFile(gpa.allocator(), file_path);
+}
 
-        while (try p.parseNext()) |_| {}
-    }
+fn validateFile(allocator: Allocator, file_path: []const u8) !void {
+    const file = try std.fs.cwd().openFile(file_path, .{ .mode = .read_only });
+
+    const buf = try file.readToEndAlloc(allocator, 999_999);
+    defer allocator.free(buf);
+
+    var parser = Parser.init(allocator, buf);
+    defer parser.deinit();
+
+    while (try parser.parseNext()) |_| {}
 }
