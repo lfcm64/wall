@@ -6,6 +6,10 @@
             .url = "git+https://github.com/Hejsil/zig-clap#b7e3348ed60f99ba32c75aa707ff7c87adc31b36",
             .hash = "clap-0.11.0-oBajB-TnAQC7yPLnZRT5WzHZ_4Ly4dX2OILskli74b9H",
         },
+        .llvm = .{
+            .url = "git+https://github.com/kassane/llvm-zig#8aa6f62cce6c41947738578c47843f74b5ba7f80",
+            .hash = "llvm_zig-1.0.0-IXgkxLRjBADjVMy_FbE6b-jOjr-CB-Q1iOl-xCQk9l4Q",
+        },
     },
     .minimum_zig_version = "0.15.2",
     .paths = .{""},

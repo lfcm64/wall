@@ -4,7 +4,11 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
-    const clap = b.dependency("clap", .{
+    const clap_dep = b.dependency("clap", .{
+        .target = target,
+        .optimize = optimize,
+    });
+    const llvm_dep = b.dependency("llvm", .{
         .target = target,
         .optimize = optimize,
     });
@@ -17,7 +21,8 @@ pub fn build(b: *std.Build) void {
         }),
     });
 
-    exe.root_module.addImport("clap", clap.module("clap"));
+    exe.root_module.addImport("llvm", llvm_dep.module("llvm"));
+    exe.root_module.addImport("clap", clap_dep.module("clap"));
     b.installArtifact(exe);
 
     const run_cmd = b.addRunArtifact(exe);

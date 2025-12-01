@@ -26,7 +26,6 @@ pub fn deinit(self: *Validator) void {
 
 pub fn validateTypeSection(self: *Validator, section: Section(.type)) !void {
     log.info("validating type section...", .{});
-
     const visitor = Section(.type).Visitor{
         .ptr = self,
         .visit = struct {
@@ -42,7 +41,6 @@ pub fn validateTypeSection(self: *Validator, section: Section(.type)) !void {
 
 pub fn validateImportSection(self: *Validator, section: Section(.import)) !void {
     log.info("validating import section...", .{});
-
     const visitor = Section(.import).Visitor{
         .ptr = self,
         .visit = struct {
@@ -58,7 +56,6 @@ pub fn validateImportSection(self: *Validator, section: Section(.import)) !void 
 
 pub fn validateFuncSection(self: *Validator, section: Section(.func)) !void {
     log.info("validating func section...", .{});
-
     const visitor = Section(.func).Visitor{
         .ptr = self,
         .visit = struct {
@@ -75,7 +72,6 @@ pub fn validateFuncSection(self: *Validator, section: Section(.func)) !void {
 
 pub fn validateTableSection(self: *Validator, section: Section(.table)) !void {
     log.info("validating table section...", .{});
-
     const visitor = Section(.table).Visitor{
         .ptr = self,
         .visit = struct {
@@ -91,7 +87,6 @@ pub fn validateTableSection(self: *Validator, section: Section(.table)) !void {
 
 pub fn validateMemorySection(self: *Validator, section: Section(.memory)) !void {
     log.info("validating memory section...", .{});
-
     const visitor = Section(.memory).Visitor{
         .ptr = self,
         .visit = struct {
@@ -107,7 +102,6 @@ pub fn validateMemorySection(self: *Validator, section: Section(.memory)) !void 
 
 pub fn validateGlobalSection(self: *Validator, section: Section(.global)) !void {
     log.info("validating global section...", .{});
-
     const visitor = Section(.global).Visitor{
         .ptr = self,
         .visit = struct {
@@ -144,7 +138,6 @@ fn validateGlobal(self: *Validator, global: types.Global) !void {
 
 pub fn validateExportSection(self: *Validator, section: Section(.@"export")) !void {
     log.info("validating export section...", .{});
-
     const visitor = Section(.@"export").Visitor{
         .ptr = self,
         .visit = struct {
@@ -172,7 +165,6 @@ pub fn validateStartSection(self: *Validator, section: Section(.start)) !void {
 
 pub fn validateElementSection(self: *Validator, section: Section(.elem)) !void {
     log.info("validating element section...", .{});
-
     const visitor = Section(.elem).Visitor{
         .ptr = self,
         .visit = struct {
@@ -194,7 +186,6 @@ pub fn validateElementSection(self: *Validator, section: Section(.elem)) !void {
 
 pub fn validateCodeSection(self: *Validator, section: Section(.code)) !void {
     log.info("validating code section...", .{});
-
     const visitor = Section(.code).Visitor{
         .ptr = self,
         .visit = struct {
@@ -217,7 +208,6 @@ pub fn validateCodeSection(self: *Validator, section: Section(.code)) !void {
 
 pub fn validateDataSection(self: *Validator, section: Section(.data)) !void {
     log.info("validating data section...", .{});
-
     const visitor = Section(.data).Visitor{
         .ptr = self,
         .visit = struct {
