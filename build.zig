@@ -4,6 +4,12 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
+    const llvm_dep = b.dependency("llvm", .{
+        .target = target,
+        .optimize = optimize,
+    });
+    const llvm_mod = llvm_dep.module("llvm");
+
     const mod = b.addModule("wall", .{
         .root_source_file = b.path("src/main.zig"),
         .target = target,
@@ -21,6 +27,7 @@ pub fn build(b: *std.Build) void {
         }),
     });
 
+    exe.root_module.addImport("llvm", llvm_mod);
     b.installArtifact(exe);
 
     const run_step = b.step("run", "Run the app");
@@ -34,3 +41,4 @@ pub fn build(b: *std.Build) void {
         run_cmd.addArgs(args);
     }
 }
+
