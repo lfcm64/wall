@@ -1,1 +1,0 @@
-const Printer = @This();

@@ -1,14 +1,16 @@
 const std = @import("std");
-const sections = @import("sections.zig");
 const indices = @import("indices.zig");
+const instr = @import("instr.zig");
+
+const Vec = @import("vecs.zig").Vec;
 
 const io = std.io;
-const SectionLimited = sections.SectionLimited;
 
-pub const VarU32 = struct {
-    pub fn fromReader(reader: *io.Reader) !u32 {
-        return reader.takeLeb128(u32);
-    }
+const Instruction = instr.Instruction;
+
+pub const Header = struct {
+    magic: u32,
+    version: u32,
 };
 
 pub const ValType = enum(u8) {
@@ -28,11 +30,10 @@ pub const Expr = union(enum) {
     i64: i64,
     f32: f32,
     f64: f64,
-    global: indices.GlobalIdx,
+    global: indices.Global,
 
     pub fn fromReader(reader: *io.Reader) !Expr {
         const opcode = try reader.takeByte();
-
         const expr: Expr = switch (opcode) {
             0x41 => .{ .i32 = try reader.takeLeb128(i32) }, // i32.const
             0x42 => .{ .i64 = try reader.takeLeb128(i64) }, // i64.const
@@ -41,7 +42,6 @@ pub const Expr = union(enum) {
             0x23 => .{ .global = try reader.takeLeb128(u32) }, // get_global
             else => return error.InvalidInitExprOpcode,
         };
-
         const end = try reader.takeByte();
         if (end != 0x0B) return error.MissingEndOpcode;
         return expr;
@@ -75,12 +75,10 @@ pub const Table = struct {
     limits: Limits,
 
     pub fn fromReader(reader: *io.Reader) !Table {
-        const limits = try Limits.fromReader(reader);
-
+        const lim = try Limits.fromReader(reader);
         const funcref = try reader.takeByte();
         if (funcref != 0x70) return error.InvalidElemType;
-
-        return .{ .limits = limits };
+        return .{ .limits = lim };
     }
 };
 
@@ -101,12 +99,9 @@ pub const GlobalType = struct {
     mut: Mutability,
 
     pub fn fromReader(reader: *io.Reader) !GlobalType {
-        const valtype: ValType = @enumFromInt(try reader.takeByte());
-        const mut: Mutability = @enumFromInt(try reader.takeByte());
-
         return .{
-            .valtype = valtype,
-            .mut = mut,
+            .valtype = @enumFromInt(try reader.takeByte()),
+            .mut = @enumFromInt(try reader.takeByte()),
         };
     }
 };
@@ -118,8 +113,7 @@ pub const Global = struct {
     pub fn fromReader(reader: *io.Reader) !Global {
         const ty = try GlobalType.fromReader(reader);
         const init_expr = try Expr.fromReader(reader);
-
-        return Global{
+        return .{
             .ty = ty,
             .init_expr = init_expr,
         };
@@ -127,10 +121,10 @@ pub const Global = struct {
 };
 
 pub const ExportKind = union(enum) {
-    func: indices.FuncIdx,
-    table: indices.TableIdx,
-    memory: indices.MemIdx,
-    global: indices.GlobalIdx,
+    func: indices.Func,
+    table: indices.Table,
+    memory: indices.Mem,
+    global: indices.Global,
 
     pub fn fromReader(reader: *io.Reader) !ExportKind {
         const tag = try reader.takeByte();
@@ -159,10 +153,21 @@ pub const Export = struct {
 };
 
 pub const ImportDesc = union(enum) {
-    func: indices.FuncIdx,
+    func: indices.Func,
     table: Table,
     memory: Memory,
     global: GlobalType,
+
+    pub fn fromReader(reader: *io.Reader) !ImportDesc {
+        const tag = try reader.takeByte();
+        return switch (tag) {
+            0x00 => .{ .func = try reader.takeLeb128(u32) },
+            0x01 => .{ .table = try Table.fromReader(reader) },
+            0x02 => .{ .memory = try Memory.fromReader(reader) },
+            0x03 => .{ .global = try GlobalType.fromReader(reader) },
+            else => return error.InvalidImportDescTag,
+        };
+    }
 };
 
 pub const Import = struct {
@@ -171,21 +176,13 @@ pub const Import = struct {
     desc: ImportDesc,
 
     pub fn fromReader(reader: *io.Reader) !Import {
-        const tag = try reader.takeByte();
-
         const module_size = try reader.takeLeb128(u32);
         const module = try reader.take(module_size);
 
         const name_size = try reader.takeLeb128(u32);
         const name = try reader.take(name_size);
 
-        const desc: ImportDesc = switch (tag) {
-            0x00 => .{ .func = try reader.takeLeb128(u32) },
-            0x01 => .{ .table = try Table.fromReader(reader) },
-            0x02 => .{ .memory = try Memory.fromReader(reader) },
-            0x03 => .{ .global = try GlobalType.fromReader(reader) },
-            else => return error.InvalidImportDescTag,
-        };
+        const desc = try ImportDesc.fromReader(reader);
         return .{
             .module = module,
             .name = name,
@@ -209,7 +206,6 @@ pub const FuncType = struct {
 
         const result_count = try reader.takeLeb128(u32);
         const results: ResultType = @ptrCast(try reader.take(result_count));
-
         return .{
             .params = params,
             .results = results,
@@ -218,27 +214,15 @@ pub const FuncType = struct {
 };
 
 pub const FuncBody = struct {
-    const Locals = SectionLimited(Local, Local.fromReader);
-
     size: u32,
-    locals: Locals,
+    locals: Vec(Local),
     code: []const u8,
 
     pub fn fromReader(reader: *io.Reader) !FuncBody {
         const size = try reader.takeLeb128(u32);
-
-        const initial_pos = reader.seek;
-        const local_count = try reader.takeLeb128(u32);
-
-        for (0..local_count) |_| {
-            _ = try Local.fromReader(reader);
-        }
-        const bytes = reader.buffer[initial_pos..reader.seek];
-        const locals = try Locals.fromBytes(bytes);
-
-        const code_size = size - (reader.seek - initial_pos);
-        const code = try reader.take(code_size);
-
+        const end = reader.seek + size;
+        const locals = try Vec(Local).fromReader(reader);
+        const code = try reader.take(end - reader.seek);
         return .{
             .size = size,
             .locals = locals,
@@ -248,33 +232,23 @@ pub const FuncBody = struct {
 };
 
 pub const Element = struct {
-    const Indices = SectionLimited(u32, VarU32.fromReader);
-
-    table_idx: indices.TableIdx,
+    table_idx: indices.Table,
     offset: Expr,
-    indices: Indices,
+    indices: Vec(u32),
 
     pub fn fromReader(reader: *io.Reader) !Element {
         const table_idx = try reader.takeLeb128(u32);
         const offset = try Expr.fromReader(reader);
-
-        const initial_pos = reader.seek;
-        const index_count = try reader.takeLeb128(u32);
-
-        for (0..index_count) |_| {
-            _ = try VarU32.fromReader(reader);
-        }
-        const bytes = reader.buffer[initial_pos..reader.seek];
         return .{
             .table_idx = table_idx,
             .offset = offset,
-            .indices = try Indices.fromBytes(bytes),
+            .indices = try Vec(u32).fromReader(reader),
         };
     }
 };
 
 pub const Segment = struct {
-    mem_idx: indices.MemIdx,
+    mem_idx: indices.Mem,
     offset: Expr,
     bytes: []const u8,
 
@@ -284,8 +258,7 @@ pub const Segment = struct {
 
         const bytes_size = try reader.takeLeb128(u32);
         const bytes: []const u8 = @ptrCast(try reader.take(bytes_size));
-
-        return Segment{
+        return .{
             .mem_idx = mem_idx,
             .offset = offset,
             .bytes = bytes,

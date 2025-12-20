@@ -1,29 +1,29 @@
 const Parser = @This();
 
 const std = @import("std");
-const sections = @import("../core/sections.zig");
+const wasm = @import("../wasm/wasm.zig");
 
-const Validator = @import("Validator.zig");
+const Handler = @import("Handler.zig");
 
 const io = std.io;
-const Allocator = std.mem.Allocator;
+const sections = wasm.sections;
+const types = wasm.types;
 
 const Section = sections.Section;
 
+source: []const u8,
+reader: io.Reader,
+state: State = .header,
+
 const log = std.log.scoped(.parser);
 
-bytes: []const u8,
+pub const State = enum {
+    header,
+    section,
+};
 
-reader: io.Reader,
-validator: Validator,
-
-state: State = .not_started,
-
-pub const ParsingEvent = union(enum) {
-    ModuleHeader: struct {
-        magic: u32,
-        version: u32,
-    },
+pub const Event = union(enum) {
+    ModuleHeader: types.Header,
     CustomSection: Section(.custom),
     TypeSection: Section(.type),
     ImportSection: Section(.import),
@@ -38,23 +38,11 @@ pub const ParsingEvent = union(enum) {
     DataSection: Section(.data),
 };
 
-pub const State = union(enum) {
-    not_started,
-    header,
-    section: sections.SectionType,
-    finished,
-};
-
-pub fn init(allocator: Allocator, bytes: []const u8) Parser {
+pub fn init(source: []const u8) Parser {
     return .{
-        .bytes = bytes,
-        .reader = io.Reader.fixed(bytes),
-        .validator = Validator.init(allocator),
+        .source = source,
+        .reader = io.Reader.fixed(source),
     };
-}
-
-pub fn deinit(self: *Parser) void {
-    self.validator.deinit();
 }
 
 pub fn reset(self: *Parser) void {
@@ -62,86 +50,47 @@ pub fn reset(self: *Parser) void {
     self.state = .header;
 }
 
-pub fn parseNext(self: *Parser) !?ParsingEvent {
-    if (self.reader.seek == self.bytes.len) self.state = .finished;
-
-    switch (self.state) {
-        .not_started => {
-            const magic = try self.reader.takeInt(u32, .little);
-            const version = try self.reader.takeInt(u32, .little);
-
-            log.info("module header parsed", .{});
-            self.state = .header;
-
-            return .{ .ModuleHeader = .{
-                .magic = magic,
-                .version = version,
-            } };
-        },
-        .header, .section => {
-            const section_type: sections.SectionType = @enumFromInt(try self.reader.takeByte());
-            const section_size = try self.reader.takeLeb128(u32);
-
-            const bytes = try self.reader.take(section_size);
-            self.state = .{ .section = section_type };
-
-            log.info("{} section parsed", .{section_type});
-            switch (section_type) {
-                inline else => |ty| {
-                    const info = @typeInfo(ParsingEvent);
-                    const field = info.@"union".fields[@intFromEnum(ty) + 1];
-
-                    const section = try Section(ty).fromBytes(bytes);
-                    if (ty != .custom) {
-                        const func = @field(Validator, "validate" ++ field.name);
-                        try func(&self.validator, section);
-                    }
-                    return @unionInit(
-                        ParsingEvent,
-                        field.name,
-                        section,
-                    );
-                },
-            }
-        },
-        .finished => return null,
-    }
+pub fn parseAll(self: *Parser, handler: Handler) !void {
+    while (try self.parseNext(handler)) {}
 }
 
-fn parseNextSection(self: *Parser) !?ParsingEvent {
-    std.debug.assert(self.state == .header or self.state == .section);
+pub fn parseNext(self: *Parser, handler: Handler) !bool {
+    if (self.reader.seek == self.source.len) return false;
 
-    const section_type: sections.SectionType = @enumFromInt(try self.reader.takeByte());
-    const section_size = try self.reader.takeLeb128(u32);
+    switch (self.state) {
+        .header => {
+            const magic = try self.reader.takeInt(u32, .little);
+            const version = try self.reader.takeInt(u32, .little);
+            self.state = .section;
+            try handler.onEvent(.{ .ModuleHeader = .{
+                .magic = magic,
+                .version = version,
+            } });
+        },
+        .section => try self.parseNextSection(handler),
+    }
+    return true;
+}
 
-    const bytes = try self.reader.take(section_size);
-    self.state = .{ .section = section_type };
-
-    log.info("{} section parsed", .{section_type});
-
+fn parseNextSection(self: *Parser, handler: Handler) !void {
+    const section_type: wasm.sections.SectionType = @enumFromInt(try self.reader.takeByte());
+    var event: Event = undefined;
     switch (section_type) {
-        .custom => return .{ .CustomSection = {} },
+        .custom => {
+            event = Event{ .CustomSection = undefined };
+        },
         .start => {
             const func_idx = try self.reader.takeLeb128(u32);
             const section = Section(.start){ .func_idx = func_idx };
-
-            try self.validator.validateStartSection(section);
-            return .{ .StartSection = section };
+            event = Event{ .StartSection = section };
         },
         inline else => |ty| {
-            const info = @typeInfo(ParsingEvent);
+            const info = @typeInfo(Event);
             const field = info.@"union".fields[@intFromEnum(ty) + 1];
 
-            const section = try Section(ty).fromBytes(bytes);
-
-            const func = @field(Validator, "validate" ++ field.name);
-            try func(&self.validator, section);
-
-            return @unionInit(
-                ParsingEvent,
-                field.name,
-                section,
-            );
+            const section = try Section(ty).fromReader(&self.reader);
+            event = @unionInit(Event, field.name, section);
         },
     }
+    try handler.onEvent(event);
 }

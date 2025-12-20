@@ -1,16 +1,18 @@
-const OperandValidator = @This();
+const FunctionValidator = @This();
 
 const std = @import("std");
-const types = @import("../core/types.zig");
-const instr = @import("../core/instr.zig");
+const wasm = @import("../wasm/wasm.zig");
 
-const Context = @import("Context.zig");
-const Opcode = @import("../core/opcode.zig").Opcode;
+const Module = @import("../Module.zig");
 
 const io = std.io;
+const types = wasm.types;
+const instr = wasm.instr;
+
 const Allocator = std.mem.Allocator;
 const ValType = types.ValType;
 const Instruction = instr.Instruction;
+const Opcode = instr.Opcode;
 
 const OperandStack = std.ArrayList(ValType);
 const ControlStack = std.ArrayList(ControlFrame);
@@ -23,92 +25,90 @@ const ControlFrame = struct {
     unreachable_flag: bool = false,
 };
 
-const log = std.log.scoped(.operand_validator);
+const log = std.log.scoped(.func_validator);
 
 allocator: Allocator,
-reader: io.Reader,
 
-context: *Context,
-
+module: *const Module,
 op_stack: OperandStack = .{},
 ctrl_stack: ControlStack = .{},
 
-params: []const ValType,
+func_type: types.FuncType,
+code: []const u8,
 locals: []const ValType,
 
-pub fn init(allocator: Allocator, context: *Context, func: types.FuncBody, func_idx: u32) !OperandValidator {
-    const func_type = try context.typeOfFunc(func_idx);
-    const locals = try func.locals.collect(allocator);
+pub fn init(allocator: Allocator, module: *const Module, func_idx: u32) !FunctionValidator {
+    const func_type = module.typeOfFunc(func_idx);
+    const func_body = module.code.items[func_idx];
 
-    var expended: std.ArrayList(ValType) = .{};
-    for (locals) |loc| try expended.appendNTimes(allocator, loc.valtype, loc.count);
+    var locals: std.ArrayList(ValType) = .{};
+    for (func_type.params) |param| try locals.append(allocator, param);
 
-    var ctrl_stack: ControlStack = .{};
-    try ctrl_stack.append(
-        allocator,
-        .{
-            .opcode = .block,
-            .start_types = &[_]ValType{},
-            .end_types = &[_]ValType{},
-        },
-    );
+    var it = func_body.locals.iter();
+    while (try it.next()) |local| try locals.appendNTimes(allocator, local.valtype, local.count);
+
     return .{
         .allocator = allocator,
-        .reader = io.Reader.fixed(func.code),
-        .context = context,
-        .ctrl_stack = ctrl_stack,
-        .params = func_type.params,
-        .locals = try expended.toOwnedSlice(allocator),
+        .module = module,
+        .func_type = func_type,
+        .code = func_body.code,
+        .locals = try locals.toOwnedSlice(allocator),
     };
 }
 
-pub fn deinit(self: *OperandValidator) void {
+pub fn deinit(self: *FunctionValidator) void {
     self.allocator.free(self.locals);
     self.op_stack.deinit(self.allocator);
     self.ctrl_stack.deinit(self.allocator);
 }
 
-pub fn validate(self: *OperandValidator) !void {
-    log.info("validating new function...", .{});
-    while (self.reader.seek < self.reader.buffer.len) {
-        const instruction = try Instruction.fromReader(&self.reader);
-        try self.validateInstruction(instruction);
+pub fn validate(self: *FunctionValidator) !void {
+    try self.pushControlFrame(
+        .block,
+        self.func_type.params,
+        self.func_type.results,
+    );
+
+    var it = instr.Iterator.init(self.code);
+    while (try it.next()) |in| {
+        try self.validateInstr(in);
     }
-    log.info("function validated", .{});
 }
 
-fn pushOperand(self: *OperandValidator, ty: ValType) !void {
-    log.debug("pushing {} in op_stack, stack size: {}", .{ ty, self.op_stack.items.len });
+fn pushOperand(self: *FunctionValidator, ty: ValType) !void {
     try self.op_stack.append(self.allocator, ty);
 }
 
-fn pushOperands(self: *OperandValidator, operands: []const ValType) !void {
+fn pushOperands(self: *FunctionValidator, operands: []const ValType) !void {
     for (operands) |op| {
         try self.pushOperand(op);
     }
 }
 
-fn popOperand(self: *OperandValidator) !ValType {
-    if (self.op_stack.items.len == 0) return error.StackUnderflow;
-    const ty = self.op_stack.pop().?;
-    log.debug("poping {} in op_stack, stack size: {}", .{ ty, self.op_stack.items.len });
-    return ty;
+fn popOperand(self: *FunctionValidator) !ValType {
+    if (self.op_stack.items.len == 0) return error.OperandStackUnderflow;
+    return self.op_stack.pop().?;
 }
 
-fn popOperandExpect(self: *OperandValidator, expected: ValType) !ValType {
+fn popOperandExpect(self: *FunctionValidator, expected: ValType) !ValType {
     const ty = try self.popOperand();
     if (ty != expected) return error.TypeMismatch;
     return ty;
 }
 
-fn popOperandsExpect(self: *OperandValidator, operands: []const ValType) !void {
+fn popOperandsExpect(self: *FunctionValidator, operands: []const ValType) !void {
     const len = operands.len;
     for (operands, 0..) |_, i| {
         _ = try self.popOperandExpect(operands[len - i - 1]);
     }
 }
 
-pub fn pushControlFrame(self: *OperandValidator, opcode: Opcode, in: []const ValType, out: []const ValType) !void {
+pub fn pushControlFrame(
+    self: *FunctionValidator,
+    opcode: Opcode,
+    in: []const ValType,
+    out: []const ValType,
+) !void {
     const frame = ControlFrame{
         .opcode = opcode,
         .start_types = in,
@@ -120,33 +120,26 @@ pub fn pushControlFrame(self: *OperandValidator, opcode: Opcode, in: []const Val
     try self.pushOperands(in);
 }
 
-fn popControlFrame(self: *OperandValidator) !ControlFrame {
-    if (self.ctrl_stack.items.len == 0) return error.ValidatorPopControlFrameControlStackEmpty;
-    const frame = self.ctrl_stack.items[self.ctrl_stack.items.len - 1];
-    try self.popOperandsExpect(frame.end_types);
-    if (self.op_stack.items.len != frame.height) return error.ValidatorPopControlFrameMismatchedSizes;
+fn popControlFrame(self: *FunctionValidator) !ControlFrame {
+    if (self.ctrl_stack.items.len == 0) return error.ControlStackUnderflow;
+    const frame = self.ctrl_stack.getLast();
+    if (!frame.unreachable_flag) {
+        try self.popOperandsExpect(frame.end_types);
+    }
+    if (self.op_stack.items.len != frame.height) return error.ControlFrameMismatchedSizes;
     _ = self.ctrl_stack.pop();
     return frame;
 }
 
-fn markUnreachable(self: *OperandValidator) void {
+fn markUnreachable(self: *FunctionValidator) void {
     if (self.ctrl_stack.items.len == 0) return;
-
-    var frame = self.ctrl_stack.getLast();
+    var frame = &self.ctrl_stack.items[self.ctrl_stack.items.len - 1];
     frame.unreachable_flag = true;
-
     self.op_stack.items.len = frame.height;
 }
 
-fn getLocal(self: *OperandValidator, n: usize) !ValType {
-    if (n < self.params.len) return self.params[n];
-    if (n < self.params.len + self.locals.len) return self.locals[n - self.params.len];
-    return error.LocalIndexOutOFBounds;
-}
-
-fn validateInstruction(self: *OperandValidator, instruction: Instruction) !void {
-    log.debug("validating {s} instruction", .{@tagName(instruction)});
-    switch (instruction) {
+fn validateInstr(self: *FunctionValidator, in: Instruction) !void {
+    switch (in) {
         // CONTROL
         .block => |block| try self.validateBlockTypeOp(.block, block),
         .loop => |block| try self.validateBlockTypeOp(.loop, block),
@@ -180,15 +173,13 @@ fn validateInstruction(self: *OperandValidator, instruction: Instruction) !void 
         .nop => {},
 
         .call => |idx| {
-            const func_type = try self.context.typeOfFunc(idx);
+            const func_type = self.module.typeOfFunc(idx);
             try self.popOperandsExpect(func_type.params);
             try self.pushOperands(func_type.results);
         },
         .call_indirect => |call| {
             _ = try self.popOperandExpect(.i32);
-            const func_type = try self.context.getFuncType(call.type_idx);
-
-            if (call.table_idx >= self.context.tableCount()) return error.TableIndexOutOfBounds;
+            const func_type = self.module.functypes.items[call.type_idx];
             try self.popOperandsExpect(func_type.params);
             try self.pushOperands(func_type.results);
         },
@@ -206,25 +197,25 @@ fn validateInstruction(self: *OperandValidator, instruction: Instruction) !void 
 
         // VARIABLES
         .@"local.get" => |idx| {
-            const loc = try self.getLocal(idx);
+            const loc = self.locals[idx];
             try self.pushOperand(loc);
         },
         .@"local.set" => |idx| {
-            const loc = try self.getLocal(idx);
+            const loc = self.locals[idx];
             _ = try self.popOperandExpect(loc);
         },
         .@"local.tee" => |idx| {
-            const loc = try self.getLocal(idx);
+            const loc = self.locals[idx];
             _ = try self.popOperandExpect(loc);
             try self.pushOperand(loc);
         },
         .@"global.get" => |idx| {
-            const global = try self.context.getGlobal(idx);
-            try self.pushOperand(global.valtype);
+            const global = self.module.globals.items[idx];
+            try self.pushOperand(global.ty.valtype);
         },
         .@"global.set" => |idx| {
-            const global = try self.context.getGlobal(idx);
-            _ = try self.popOperandExpect(global.valtype);
+            const global = self.module.globals.items[idx];
+            _ = try self.popOperandExpect(global.ty.valtype);
         },
 
         // MEMORY LOAD
@@ -457,7 +448,7 @@ fn validateInstruction(self: *OperandValidator, instruction: Instruction) !void 
     }
 }
 
-pub fn validateBlockTypeOp(self: *OperandValidator, opcode: Opcode, block: instr.BlockType) !void {
+pub fn validateBlockTypeOp(self: *FunctionValidator, opcode: Opcode, block: instr.BlockType) !void {
     std.debug.assert(opcode == .block or opcode == .loop or opcode == .@"if");
 
     const operands = switch (block) {
@@ -467,7 +458,7 @@ pub fn validateBlockTypeOp(self: *OperandValidator, opcode: Opcode, block: instr
     try self.pushControlFrame(opcode, operands, operands);
 }
 
-pub fn validateBr(self: *OperandValidator, label: u32) !void {
+pub fn validateBr(self: *FunctionValidator, label: u32) !void {
     if (label >= self.ctrl_stack.items.len) return error.ValidateBrInvalidLabel;
     const frame = self.ctrl_stack.items[self.ctrl_stack.items.len - 1 - label];
 
@@ -476,7 +467,7 @@ pub fn validateBr(self: *OperandValidator, label: u32) !void {
     self.markUnreachable();
 }
 
-pub fn validateBrIf(self: *OperandValidator, label: u32) !void {
+pub fn validateBrIf(self: *FunctionValidator, label: u32) !void {
     if (label >= self.ctrl_stack.items.len) return error.ValidateBrIfInvalidLabel;
     const frame = self.ctrl_stack.items[self.ctrl_stack.items.len - 1 - label];
 
@@ -486,7 +477,7 @@ pub fn validateBrIf(self: *OperandValidator, label: u32) !void {
     try self.pushOperands(operands);
 }
 
-pub fn validateBrTable(self: *OperandValidator, table: instr.BrTable) !void {
+pub fn validateBrTable(self: *FunctionValidator, table: instr.BrTable) !void {
     _ = try self.popOperandExpect(.i32);
     if (table.labels.count >= self.ctrl_stack.items.len) return error.ValidateBrTableInvalidLabel;
 
@@ -512,17 +503,16 @@ pub fn validateBrTable(self: *OperandValidator, table: instr.BrTable) !void {
             try self.pushOperand(temp[default_operands.len - 1 - i]);
         }
     }
-
     try self.popOperandsExpect(default_operands);
     self.markUnreachable();
 }
 
-fn validateUnaryOp(self: *OperandValidator, operand: ValType, result: ValType) !void {
+fn validateUnaryOp(self: *FunctionValidator, operand: ValType, result: ValType) !void {
     _ = try self.popOperandExpect(operand);
     try self.pushOperand(result);
 }
 
-fn validateBinaryOp(self: *OperandValidator, left: ValType, right: ValType, result: ValType) !void {
+fn validateBinaryOp(self: *FunctionValidator, left: ValType, right: ValType, result: ValType) !void {
     _ = try self.popOperandExpect(left);
     _ = try self.popOperandExpect(right);
     try self.pushOperand(result);
