@@ -1,6 +1,6 @@
 # wall
 
-A WebAssembly **runtime** + **aot compiler** project.
+A WebAssembly **runtime** + **JIT compiler** project.
 
 Currently **only the parser and validator are implemented**.
 
@@ -27,18 +27,8 @@ Provide a small, clean foundation for:
 zig build
 ```
 
-## Basic usage
-
-Validate a `.wasm` file:
-
-```
-wall validate file.wasm
-```
-
 ## Roadmap
 
 * Add LLVM IR generation
 * Add runtime (memory, tables, imports)
 * Add codegen
-
-
