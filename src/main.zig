@@ -20,7 +20,7 @@ pub fn main() !void {
 
     var parser = Parser.init(source, &ctx);
 
-    const validator = Validator{};
+    const validator = Validator.init(.{});
     var pipeline = ValidationPipeline.init(.{validator});
 
     try pipeline.run(&parser);

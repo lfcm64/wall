@@ -8,19 +8,19 @@ const types = wasm.types;
 const Section = sections.Section;
 
 pub const Payload = union(enum) {
-    ModuleHeader: types.Header,
-    CustomSection: Section(.custom),
-    TypeSection: Section(.type),
-    ImportSection: Section(.import),
-    FuncSection: Section(.func),
-    TableSection: Section(.table),
-    MemorySection: Section(.memory),
-    GlobalSection: Section(.global),
-    ExportSection: Section(.@"export"),
-    StartSection: Section(.start),
-    ElementSection: Section(.elem),
-    CodeSection: Section(.code),
-    DataSection: Section(.data),
+    module_header: types.Header,
+    custom_section: Section(.custom),
+    type_section: Section(.type),
+    import_section: Section(.import),
+    func_section: Section(.func),
+    table_section: Section(.table),
+    memory_section: Section(.memory),
+    global_section: Section(.global),
+    export_section: Section(.@"export"),
+    start_section: Section(.start),
+    element_section: Section(.elem),
+    code_section: Section(.code),
+    data_section: Section(.data),
 };
 
 pub const Event = struct {

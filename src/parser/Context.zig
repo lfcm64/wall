@@ -36,16 +36,16 @@ pub fn deinit(self: *Context) void {
     self.allocator.free(self.exports);
 }
 
-pub fn onPayload(self: *Context, payload: Payload) !void {
+pub fn receivePayload(self: *Context, payload: Payload) !void {
     switch (payload) {
-        .TypeSection => |section| self.functypes = try section.collect(self.allocator),
-        .ImportSection => |section| self.imports = try section.collect(self.allocator),
-        .FuncSection => |section| self.funcs = try section.collect(self.allocator),
-        .TableSection => |section| self.tables = try section.collect(self.allocator),
-        .MemorySection => |section| self.memories = try section.collect(self.allocator),
-        .GlobalSection => |section| self.globals = try section.collect(self.allocator),
-        .ExportSection => |section| self.exports = try section.collect(self.allocator),
-        .StartSection => |section| self.start = section.func_idx,
+        .type_section => |section| self.functypes = try section.collect(self.allocator),
+        .import_section => |section| self.imports = try section.collect(self.allocator),
+        .func_section => |section| self.funcs = try section.collect(self.allocator),
+        .table_section => |section| self.tables = try section.collect(self.allocator),
+        .memory_section => |section| self.memories = try section.collect(self.allocator),
+        .global_section => |section| self.globals = try section.collect(self.allocator),
+        .export_section => |section| self.exports = try section.collect(self.allocator),
+        .start_section => |section| self.start = section.func_idx,
         else => {},
     }
 }

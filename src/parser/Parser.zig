@@ -19,13 +19,14 @@ reader: io.Reader,
 
 ctx: *Context,
 
-state: State = .header,
+state: State = .not_started,
 
 const log = std.log.scoped(.parser);
 
-pub const State = enum {
+pub const State = union(enum) {
+    not_started,
     header,
-    section,
+    section: sections.SectionType,
 };
 
 pub fn init(source: []const u8, ctx: *Context) Parser {
@@ -38,7 +39,7 @@ pub fn init(source: []const u8, ctx: *Context) Parser {
 
 pub fn reset(self: *Parser) void {
     self.reader.seek = 0;
-    self.state = .header;
+    self.state = .not_started;
 }
 
 pub fn parseNext(self: *Parser) !?Event {
@@ -46,13 +47,18 @@ pub fn parseNext(self: *Parser) !?Event {
     var payload: Payload = undefined;
 
     switch (self.state) {
-        .header => {
+        .not_started => {
             const header = try types.Header.fromReader(&self.reader);
-            self.state = .section;
-            payload = .{ .ModuleHeader = header };
+            payload = .{ .module_header = header };
+            self.state = .header;
         },
-        .section => {
+        .header, .section => {
             const section_type: sections.SectionType = @enumFromInt(try self.reader.takeByte());
+            if (self.state == .section and section_type != .custom) {
+                if (@intFromEnum(self.state.section) >= @intFromEnum(section_type)) {
+                    return error.SectionsOutOfOrder;
+                }
+            }
             switch (section_type) {
                 inline else => |ty| {
                     const info = @typeInfo(Payload);
@@ -60,10 +66,11 @@ pub fn parseNext(self: *Parser) !?Event {
 
                     const section = try Section(ty).fromReader(&self.reader);
                     payload = @unionInit(Payload, field.name, section);
+                    self.state = .{ .section = section_type };
                 },
             }
         },
     }
-    try self.ctx.onPayload(payload);
+    try self.ctx.receivePayload(payload);
     return Event{ .ctx = self.ctx, .payload = payload };
 }

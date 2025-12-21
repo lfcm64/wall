@@ -25,10 +25,17 @@ const ControlFrame = struct {
     unreachable_flag: bool = false,
 };
 
+pub const Config = struct {
+    max_nesting_depth: u32 = 1024,
+    max_locals: u32 = 50000,
+    max_function_size: u32 = 128 * 1024, // 128KB
+};
+
 const log = std.log.scoped(.func_validator);
 
 allocator: Allocator,
 
+config: Config,
 ctx: *const Context,
 op_stack: OperandStack = .{},
 ctrl_stack: ControlStack = .{},
@@ -37,7 +44,8 @@ func_type: types.FuncType,
 code: []const u8,
 locals: []const ValType,
 
-pub fn init(body: types.FuncBody, func_idx: u32, ctx: *const Context) !FunctionValidator {
+pub fn init(body: types.FuncBody, func_idx: u32, ctx: *const Context, config: Config) !FunctionValidator {
+    if (body.code.len > config.max_function_size) return error.MaxFunctionSizeReached;
     const func_type = ctx.typeOfFunc(func_idx);
 
     var locals: std.ArrayList(ValType) = .{};
@@ -45,9 +53,11 @@ pub fn init(body: types.FuncBody, func_idx: u32, ctx: *const Context) !FunctionV
 
     var it = body.locals.iter();
     while (try it.next()) |local| try locals.appendNTimes(ctx.allocator, local.valtype, local.count);
+    if (locals.items.len > config.max_locals) return error.MaxLocalsReached;
 
     return .{
         .allocator = ctx.allocator,
+        .config = config,
         .ctx = ctx,
         .func_type = func_type,
         .code = body.code,
@@ -108,6 +118,9 @@ pub fn pushControlFrame(
     in: []const ValType,
     out: []const ValType,
 ) !void {
+    if (self.ctrl_stack.items.len > self.config.max_nesting_depth) {
+        return error.NestingDepthExceeded;
+    }
     const frame = ControlFrame{
         .opcode = opcode,
         .start_types = in,
