@@ -3,7 +3,7 @@ const FunctionValidator = @This();
 const std = @import("std");
 const wasm = @import("../wasm/wasm.zig");
 
-const Module = @import("../Module.zig");
+const Context = @import("../parser/Context.zig");
 
 const io = std.io;
 const types = wasm.types;
@@ -29,7 +29,7 @@ const log = std.log.scoped(.func_validator);
 
 allocator: Allocator,
 
-module: *const Module,
+ctx: *const Context,
 op_stack: OperandStack = .{},
 ctrl_stack: ControlStack = .{},
 
@@ -37,22 +37,21 @@ func_type: types.FuncType,
 code: []const u8,
 locals: []const ValType,
 
-pub fn init(allocator: Allocator, module: *const Module, func_idx: u32) !FunctionValidator {
-    const func_type = module.typeOfFunc(func_idx);
-    const func_body = module.code.items[func_idx];
+pub fn init(body: types.FuncBody, func_idx: u32, ctx: *const Context) !FunctionValidator {
+    const func_type = ctx.typeOfFunc(func_idx);
 
     var locals: std.ArrayList(ValType) = .{};
-    for (func_type.params) |param| try locals.append(allocator, param);
+    for (func_type.params) |param| try locals.append(ctx.allocator, param);
 
-    var it = func_body.locals.iter();
-    while (try it.next()) |local| try locals.appendNTimes(allocator, local.valtype, local.count);
+    var it = body.locals.iter();
+    while (try it.next()) |local| try locals.appendNTimes(ctx.allocator, local.valtype, local.count);
 
     return .{
-        .allocator = allocator,
-        .module = module,
+        .allocator = ctx.allocator,
+        .ctx = ctx,
         .func_type = func_type,
-        .code = func_body.code,
-        .locals = try locals.toOwnedSlice(allocator),
+        .code = body.code,
+        .locals = try locals.toOwnedSlice(ctx.allocator),
     };
 }
 
@@ -173,13 +172,13 @@ fn validateInstr(self: *FunctionValidator, in: Instruction) !void {
         .nop => {},
 
         .call => |idx| {
-            const func_type = self.module.typeOfFunc(idx);
+            const func_type = self.ctx.typeOfFunc(idx);
             try self.popOperandsExpect(func_type.params);
             try self.pushOperands(func_type.results);
         },
         .call_indirect => |call| {
             _ = try self.popOperandExpect(.i32);
-            const func_type = self.module.functypes.items[call.type_idx];
+            const func_type = self.ctx.functypes[call.type_idx];
             try self.popOperandsExpect(func_type.params);
             try self.pushOperands(func_type.results);
         },
@@ -210,11 +209,11 @@ fn validateInstr(self: *FunctionValidator, in: Instruction) !void {
             try self.pushOperand(loc);
         },
         .@"global.get" => |idx| {
-            const global = self.module.globals.items[idx];
+            const global = self.ctx.globals[idx];
             try self.pushOperand(global.ty.valtype);
         },
         .@"global.set" => |idx| {
-            const global = self.module.globals.items[idx];
+            const global = self.ctx.globals[idx];
             _ = try self.popOperandExpect(global.ty.valtype);
         },
 

@@ -41,8 +41,24 @@ pub fn Section(comptime section_type: SectionType) type {
 const CustomSection = struct {
     name: []const u8,
     bytes: []const u8,
+
+    pub fn fromReader(reader: *io.Reader) !CustomSection {
+        const name_size = try reader.takeLeb128(u32);
+        const name = try reader.take(name_size);
+
+        const bytes_size = try reader.takeLeb128(u32);
+        const bytes = try reader.take(bytes_size);
+        return .{
+            .name = name,
+            .bytes = bytes,
+        };
+    }
 };
 
 const StartSection = struct {
     func_idx: indices.Func,
+
+    pub fn fromReader(reader: *io.Reader) !StartSection {
+        return .{ .func_idx = try reader.takeLeb128(u32) };
+    }
 };

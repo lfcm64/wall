@@ -2,17 +2,23 @@ const Parser = @This();
 
 const std = @import("std");
 const wasm = @import("../wasm/wasm.zig");
+const event = @import("event.zig");
 
-const Handler = @import("Handler.zig");
+const Context = @import("Context.zig");
 
 const io = std.io;
 const sections = wasm.sections;
 const types = wasm.types;
 
 const Section = sections.Section;
+const Payload = event.Payload;
+const Event = event.Event;
 
 source: []const u8,
 reader: io.Reader,
+
+ctx: *Context,
+
 state: State = .header,
 
 const log = std.log.scoped(.parser);
@@ -22,26 +28,11 @@ pub const State = enum {
     section,
 };
 
-pub const Event = union(enum) {
-    ModuleHeader: types.Header,
-    CustomSection: Section(.custom),
-    TypeSection: Section(.type),
-    ImportSection: Section(.import),
-    FuncSection: Section(.func),
-    TableSection: Section(.table),
-    MemorySection: Section(.memory),
-    GlobalSection: Section(.global),
-    ExportSection: Section(.@"export"),
-    StartSection: Section(.start),
-    ElementSection: Section(.elem),
-    CodeSection: Section(.code),
-    DataSection: Section(.data),
-};
-
-pub fn init(source: []const u8) Parser {
+pub fn init(source: []const u8, ctx: *Context) Parser {
     return .{
         .source = source,
         .reader = io.Reader.fixed(source),
+        .ctx = ctx,
     };
 }
 
@@ -50,47 +41,29 @@ pub fn reset(self: *Parser) void {
     self.state = .header;
 }
 
-pub fn parseAll(self: *Parser, handler: Handler) !void {
-    while (try self.parseNext(handler)) {}
-}
-
-pub fn parseNext(self: *Parser, handler: Handler) !bool {
-    if (self.reader.seek == self.source.len) return false;
+pub fn parseNext(self: *Parser) !?Event {
+    if (self.reader.seek == self.source.len) return null;
+    var payload: Payload = undefined;
 
     switch (self.state) {
         .header => {
-            const magic = try self.reader.takeInt(u32, .little);
-            const version = try self.reader.takeInt(u32, .little);
+            const header = try types.Header.fromReader(&self.reader);
             self.state = .section;
-            try handler.onEvent(.{ .ModuleHeader = .{
-                .magic = magic,
-                .version = version,
-            } });
+            payload = .{ .ModuleHeader = header };
         },
-        .section => try self.parseNextSection(handler),
-    }
-    return true;
-}
+        .section => {
+            const section_type: sections.SectionType = @enumFromInt(try self.reader.takeByte());
+            switch (section_type) {
+                inline else => |ty| {
+                    const info = @typeInfo(Payload);
+                    const field = info.@"union".fields[@intFromEnum(ty) + 1];
 
-fn parseNextSection(self: *Parser, handler: Handler) !void {
-    const section_type: wasm.sections.SectionType = @enumFromInt(try self.reader.takeByte());
-    var event: Event = undefined;
-    switch (section_type) {
-        .custom => {
-            event = Event{ .CustomSection = undefined };
-        },
-        .start => {
-            const func_idx = try self.reader.takeLeb128(u32);
-            const section = Section(.start){ .func_idx = func_idx };
-            event = Event{ .StartSection = section };
-        },
-        inline else => |ty| {
-            const info = @typeInfo(Event);
-            const field = info.@"union".fields[@intFromEnum(ty) + 1];
-
-            const section = try Section(ty).fromReader(&self.reader);
-            event = @unionInit(Event, field.name, section);
+                    const section = try Section(ty).fromReader(&self.reader);
+                    payload = @unionInit(Payload, field.name, section);
+                },
+            }
         },
     }
-    try handler.onEvent(event);
+    try self.ctx.onPayload(payload);
+    return Event{ .ctx = self.ctx, .payload = payload };
 }

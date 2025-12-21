@@ -3,6 +3,8 @@ const std = @import("std");
 const io = std.io;
 const assert = std.debug.assert;
 
+const Allocator = std.mem.Allocator;
+
 pub fn Vec(comptime T: type) type {
     return struct {
         bytes: []const u8,
@@ -47,6 +49,15 @@ pub fn SizedVec(comptime T: type) type {
                 .bytes = try reader.take(size - (reader.seek - pos)),
                 .count = count,
             };
+        }
+
+        pub fn collect(self: *const @This(), allocator: Allocator) ![]T {
+            var list = try std.ArrayList(T).initCapacity(allocator, self.count);
+            errdefer list.deinit(allocator);
+
+            var it = self.iter();
+            while (try it.next()) |item| list.appendAssumeCapacity(item);
+            return list.toOwnedSlice(allocator);
         }
 
         pub fn iter(self: *const @This()) Iterator(T) {

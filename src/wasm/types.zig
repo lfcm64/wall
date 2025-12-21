@@ -11,6 +11,13 @@ const Instruction = instr.Instruction;
 pub const Header = struct {
     magic: u32,
     version: u32,
+
+    pub fn fromReader(reader: *io.Reader) !Header {
+        return .{
+            .magic = try reader.takeInt(u32, .little),
+            .version = try reader.takeInt(u32, .little),
+        };
+    }
 };
 
 pub const ValType = enum(u8) {

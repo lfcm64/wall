@@ -1,7 +1,7 @@
 .{
     .name = .wall,
     .version = "0.0.0",
-    .fingerprint = 0x786a6ab734bf9ec0,
+    .fingerprint = 0x13f5eff69ee89b48,
     .minimum_zig_version = "0.15.2",
     .dependencies = .{},
     .paths = .{
