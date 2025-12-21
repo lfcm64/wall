@@ -4,6 +4,7 @@ const std = @import("std");
 const wasm = @import("../wasm/wasm.zig");
 
 const Context = @import("../parser/Context.zig");
+
 const Event = @import("../parser/event.zig").Event;
 
 const FunctionValidator = @import("Function.zig");
@@ -43,9 +44,9 @@ pub fn onEvent(validator: *const Validator, event: Event) !void {
         .global_section => |section| try validator.validateGlobalSection(section, event.ctx),
         .export_section => |section| try validator.validateExportSection(section, event.ctx),
         .start_section => |section| try validator.validateStartSection(section, event.ctx),
-        //.element_section => |section| try validator.validateElementSection(section, event.ctx),
+        .element_section => |section| try validator.validateElementSection(section, event.ctx),
         .code_section => |section| try validator.validateCodeSection(section, event.ctx),
-        //.data_section => |section| try validator.validateDataSection(section, event.ctx),
+        .data_section => |section| try validator.validateDataSection(section, event.ctx),
         else => {},
     }
 }
@@ -156,11 +157,19 @@ fn validateStartSection(_: *const Validator, section: Section(.start), ctx: *con
     if (section.func_idx >= ctx.funcs.len) return error.StartFuncIndexOutOfBounds;
 }
 
-fn validateElementSection(validator: *const Validator, section: Section(.elem), ctx: *const Context) !void {
-    _ = validator;
-    _ = section;
-    _ = ctx;
-    // TODO: Validate element segments
+fn validateElementSection(_: *const Validator, section: Section(.elem), ctx: *const Context) !void {
+    var it = section.iter();
+    while (try it.next()) |elem| {
+        if (elem.table_idx < ctx.tables.len) return error.TableIndexOutOfBounds;
+        try validateConstExpr(elem.offset, .i32, ctx);
+
+        const total_funcs = ctx.imports.len + ctx.funcs.len;
+        var indices_it = elem.indices.iter();
+
+        while (try indices_it.next()) |func_idx| {
+            if (func_idx >= total_funcs) return error.ElementFuncIndexOutOfBounds;
+        }
+    }
 }
 
 fn validateCodeSection(self: *const Validator, section: Section(.code), ctx: *const Context) !void {
@@ -184,9 +193,10 @@ fn validateCodeSection(self: *const Validator, section: Section(.code), ctx: *co
     }
 }
 
-fn validateDataSection(validator: *const Validator, section: Section(.data), ctx: *const Context) !void {
-    _ = validator;
-    _ = section;
-    _ = ctx;
-    // TODO: Validate data segments
+fn validateDataSection(_: *const Validator, section: Section(.data), ctx: *const Context) !void {
+    var it = section.iter();
+    while (try it.next()) |data| {
+        if (data.mem_idx > ctx.memories.len) return error.MemoryIndexOutOfBounds;
+        try validateConstExpr(data.offset, .i32, ctx);
+    }
 }
