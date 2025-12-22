@@ -122,11 +122,11 @@ fn validateConstExpr(expr: types.Expr, expected_type: types.ValType, ctx: *const
         .f32 => if (expected_type != .f32) return error.ConstExprTypeMismatch,
         .f64 => if (expected_type != .f64) return error.ConstExprTypeMismatch,
         .global => |global_idx| {
-            if (global_idx >= ctx.globals.len) return error.GlobalIndexOutOfBounds;
+            if (global_idx >= ctx.imports.globals.len) return error.ConstExprReferencesNonImportedGlobal;
 
-            const global = ctx.globals[global_idx];
-            if (global.ty.mut != .@"const") return error.ConstExprReferenceMutableGlobal;
-            if (global.ty.valtype != expected_type) return error.ConstExprTypeMismatch;
+            const global = ctx.imports.globals[global_idx];
+            if (global.mut != .@"const") return error.ConstExprReferenceMutableGlobal;
+            if (global.valtype != expected_type) return error.ConstExprTypeMismatch;
         },
     }
 }
@@ -143,12 +143,11 @@ fn validateExportSection(_: *const Validator, section: Section(.@"export"), ctx:
 
         switch (exp.kind) {
             .func => |func_idx| {
-                const total_funcs = ctx.imports.len + ctx.funcs.len;
-                if (func_idx >= total_funcs) return error.ExportFuncIndexOutOfBounds;
+                if (func_idx >= ctx.funcCount()) return error.ExportFuncIndexOutOfBounds;
             },
-            .table => |table_idx| if (table_idx >= ctx.tables.len) return error.ExportTableIndexOutOfBounds,
-            .memory => |mem_idx| if (mem_idx >= ctx.memories.len) return error.ExportMemoryIndexOutOfBounds,
-            .global => |global_idx| if (global_idx >= ctx.globals.len) return error.ExportGlobalIndexOutOfBounds,
+            .table => |table_idx| if (table_idx >= ctx.tableCount()) return error.ExportTableIndexOutOfBounds,
+            .memory => |mem_idx| if (mem_idx >= ctx.memoryCount()) return error.ExportMemoryIndexOutOfBounds,
+            .global => |global_idx| if (global_idx >= ctx.globalCount()) return error.ExportGlobalIndexOutOfBounds,
         }
     }
 }
@@ -160,14 +159,12 @@ fn validateStartSection(_: *const Validator, section: Section(.start), ctx: *con
 fn validateElementSection(_: *const Validator, section: Section(.elem), ctx: *const Context) !void {
     var it = section.iter();
     while (try it.next()) |elem| {
-        if (elem.table_idx < ctx.tables.len) return error.TableIndexOutOfBounds;
+        if (elem.table_idx >= ctx.tableCount()) return error.TableIndexOutOfBounds;
         try validateConstExpr(elem.offset, .i32, ctx);
-
-        const total_funcs = ctx.imports.len + ctx.funcs.len;
+        const func_count = ctx.funcCount();
         var indices_it = elem.indices.iter();
-
         while (try indices_it.next()) |func_idx| {
-            if (func_idx >= total_funcs) return error.ElementFuncIndexOutOfBounds;
+            if (func_idx >= func_count) return error.ElementFuncIndexOutOfBounds;
         }
     }
 }
@@ -196,7 +193,7 @@ fn validateCodeSection(self: *const Validator, section: Section(.code), ctx: *co
 fn validateDataSection(_: *const Validator, section: Section(.data), ctx: *const Context) !void {
     var it = section.iter();
     while (try it.next()) |data| {
-        if (data.mem_idx > ctx.memories.len) return error.MemoryIndexOutOfBounds;
+        if (data.mem_idx >= ctx.memoryCount()) return error.MemoryIndexOutOfBounds;
         try validateConstExpr(data.offset, .i32, ctx);
     }
 }

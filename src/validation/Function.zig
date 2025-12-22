@@ -222,12 +222,12 @@ fn validateInstr(self: *FunctionValidator, in: Instruction) !void {
             try self.pushOperand(loc);
         },
         .@"global.get" => |idx| {
-            const global = self.ctx.globals[idx];
-            try self.pushOperand(global.ty.valtype);
+            const global_type = self.ctx.typeOfGlobal(idx);
+            try self.pushOperand(global_type.valtype);
         },
         .@"global.set" => |idx| {
-            const global = self.ctx.globals[idx];
-            _ = try self.popOperandExpect(global.ty.valtype);
+            const global_type = self.ctx.typeOfGlobal(idx);
+            _ = try self.popOperandExpect(global_type.valtype);
         },
 
         // MEMORY LOAD
