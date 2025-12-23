@@ -2,22 +2,17 @@ const Parser = @This();
 
 const std = @import("std");
 const wasm = @import("../wasm/wasm.zig");
-const event = @import("event.zig");
 
-const Context = @import("Context.zig");
+const Event = @import("event.zig").Event;
 
 const io = std.io;
 const sections = wasm.sections;
 const types = wasm.types;
 
 const Section = sections.Section;
-const Payload = event.Payload;
-const Event = event.Event;
 
 source: []const u8,
 reader: io.Reader,
-
-ctx: *Context,
 
 state: State = .not_started,
 
@@ -29,11 +24,10 @@ pub const State = union(enum) {
     section: sections.SectionType,
 };
 
-pub fn init(source: []const u8, ctx: *Context) Parser {
+pub fn init(source: []const u8) Parser {
     return .{
         .source = source,
         .reader = io.Reader.fixed(source),
-        .ctx = ctx,
     };
 }
 
@@ -44,13 +38,12 @@ pub fn reset(self: *Parser) void {
 
 pub fn parseNext(self: *Parser) !?Event {
     if (self.reader.seek == self.source.len) return null;
-    var payload: Payload = undefined;
 
     switch (self.state) {
         .not_started => {
             const header = try types.Header.fromReader(&self.reader);
-            payload = .{ .module_header = header };
             self.state = .header;
+            return .{ .module_header = header };
         },
         .header, .section => {
             const section_type: sections.SectionType = @enumFromInt(try self.reader.takeByte());
@@ -61,16 +54,14 @@ pub fn parseNext(self: *Parser) !?Event {
             }
             switch (section_type) {
                 inline else => |ty| {
-                    const info = @typeInfo(Payload);
+                    const info = @typeInfo(Event);
                     const field = info.@"union".fields[@intFromEnum(ty) + 1];
 
                     const section = try Section(ty).fromReader(&self.reader);
-                    payload = @unionInit(Payload, field.name, section);
                     self.state = .{ .section = section_type };
+                    return @unionInit(Event, field.name, section);
                 },
             }
         },
     }
-    try self.ctx.receivePayload(payload);
-    return Event{ .ctx = self.ctx, .payload = payload };
 }

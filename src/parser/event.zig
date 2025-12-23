@@ -1,13 +1,11 @@
 const wasm = @import("../wasm/wasm.zig");
 
-const Context = @import("Context.zig");
-
 const sections = wasm.sections;
 const types = wasm.types;
 
 const Section = sections.Section;
 
-pub const Payload = union(enum) {
+pub const Event = union(enum) {
     module_header: types.Header,
     custom_section: Section(.custom),
     type_section: Section(.type),
@@ -21,9 +19,4 @@ pub const Payload = union(enum) {
     element_section: Section(.elem),
     code_section: Section(.code),
     data_section: Section(.data),
-};
-
-pub const Event = struct {
-    ctx: *const Context,
-    payload: Payload,
 };

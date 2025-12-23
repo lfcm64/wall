@@ -3,10 +3,9 @@ const std = @import("std");
 const Parser = @import("parser/Parser.zig");
 const Validator = @import("validation/Validator.zig");
 
-const Context = @import("parser/Context.zig");
 const Pipeline = @import("pipeline.zig").Pipeline;
 
-const ValidationPipeline = Pipeline(&[_]type{Validator});
+const ValidationPipeline = Pipeline(&[_]type{*Validator});
 
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
@@ -15,13 +14,12 @@ pub fn main() !void {
 
     const source = @embedFile("tests/fib.wasm");
 
-    var ctx = Context.init(allocator);
-    defer ctx.deinit();
+    var parser = Parser.init(source);
 
-    var parser = Parser.init(source, &ctx);
+    var validator = Validator.init(allocator);
+    defer validator.deinit();
 
-    const validator = Validator.init(.{});
-    var pipeline = ValidationPipeline.init(.{validator});
+    var pipeline = ValidationPipeline.init(.{&validator});
 
     try pipeline.run(&parser);
 }

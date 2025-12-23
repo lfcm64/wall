@@ -3,7 +3,7 @@ const Validator = @This();
 const std = @import("std");
 const wasm = @import("../wasm/wasm.zig");
 
-const Context = @import("../parser/Context.zig");
+const State = @import("State.zig");
 
 const Event = @import("../parser/event.zig").Event;
 
@@ -18,182 +18,223 @@ const Section = sections.Section;
 
 const log = std.log.scoped(.validator);
 
-const MAX_PAGES = 65536;
+state: State,
 
-pub const Config = struct {
-    max_nesting_depth: u32 = 1024,
-    max_locals: u32 = 50000,
-    max_function_size: u32 = 128 * 1024, // 128KB
-    max_params: u32 = 1024,
-    max_returns: u32 = 1024,
-};
-
-config: Config,
-
-pub fn init(config: Config) Validator {
-    return .{ .config = config };
+pub fn init(allocator: Allocator) Validator {
+    return .{ .state = State.init(allocator) };
 }
 
-pub fn onEvent(validator: *const Validator, event: Event) !void {
-    switch (event.payload) {
+pub fn deinit(self: *Validator) void {
+    self.state.deinit();
+}
+
+pub fn onEvent(validator: *Validator, event: Event) !void {
+    switch (event) {
         .type_section => |section| try validator.validateTypeSection(section),
-        .import_section => |section| try validator.validateImportSection(section, event.ctx),
-        .func_section => |section| try validator.validateFuncSection(section, event.ctx),
+        .import_section => |section| try validator.validateImportSection(section),
+        .func_section => |section| try validator.validateFuncSection(section),
         .table_section => |section| try validator.validateTableSection(section),
         .memory_section => |section| try validator.validateMemorySection(section),
-        .global_section => |section| try validator.validateGlobalSection(section, event.ctx),
-        .export_section => |section| try validator.validateExportSection(section, event.ctx),
-        .start_section => |section| try validator.validateStartSection(section, event.ctx),
-        .element_section => |section| try validator.validateElementSection(section, event.ctx),
-        .code_section => |section| try validator.validateCodeSection(section, event.ctx),
-        .data_section => |section| try validator.validateDataSection(section, event.ctx),
+        .global_section => |section| try validator.validateGlobalSection(section),
+        .export_section => |section| try validator.validateExportSection(section),
+        .start_section => |section| try validator.validateStartSection(section),
+        .element_section => |section| try validator.validateElementSection(section),
+        .code_section => |section| try validator.validateCodeSection(section),
+        .data_section => |section| try validator.validateDataSection(section),
         else => {},
     }
 }
 
-fn validateTypeSection(self: *const Validator, section: Section(.type)) !void {
+fn ItemValidator(comptime section_type: sections.SectionType) type {
+    return *const fn (state: *State, item: sections.SectionItem(section_type), idx: u32) anyerror!void;
+}
+
+fn validateEach(
+    self: *Validator,
+    comptime section_type: sections.SectionType,
+    section: Section(section_type),
+    validate_item: ItemValidator(section_type),
+) !void {
     var it = section.iter();
-    while (try it.next()) |func_type| {
-        if (func_type.params.len > self.config.max_params) return error.MaxFuncParamsReached;
-        if (func_type.results.len > self.config.max_returns) return error.MaxFuncReturnsReached;
+    var i: u32 = 0;
+    while (try it.next()) |item| : (i += 1) {
+        try validate_item(&self.state, item, i);
     }
 }
 
-fn validateImportSection(_: *const Validator, section: Section(.import), ctx: *const Context) !void {
-    var it = section.iter();
-    while (try it.next()) |import| {
-        switch (import.desc) {
-            .func => |type_idx| try validateTypeIdx(type_idx, ctx),
-            .table => |table| try validateTable(table),
-            .memory => |mem| try validateMemory(mem),
-            .global => |global_type| {
-                if (global_type.mut != .@"const") return error.ImportedGlobalMustBeImmutable;
-            },
-        }
-    }
+fn validateTypeSection(self: *Validator, section: Section(.type)) !void {
+    try self.validateEach(
+        .type,
+        section,
+        struct {
+            fn validate(state: *State, ty: types.FuncType, _: u32) !void {
+                try state.addFuncType(ty);
+            }
+        }.validate,
+    );
 }
 
-fn validateFuncSection(_: *const Validator, section: Section(.func), ctx: *const Context) !void {
-    var it = section.iter();
-    while (try it.next()) |type_idx| try validateTypeIdx(type_idx, ctx);
+fn validateImportSection(self: *Validator, section: Section(.import)) !void {
+    try self.validateEach(
+        .import,
+        section,
+        struct {
+            fn validate(state: *State, import: types.Import, _: u32) !void {
+                switch (import.desc) {
+                    .func => |type_idx| if (type_idx >= state.functypes.items.len) return error.FuncIndexOutOfBounds,
+                    .table => |table| try verifyTable(table),
+                    .memory => |mem| try verifyMemory(mem),
+                    .global => |global_ty| if (global_ty.mut != .@"const") return error.ImportedGlobalMustBeImmutable,
+                }
+                try state.addImport(import);
+            }
+        }.validate,
+    );
 }
 
-fn validateTypeIdx(func_idx: indices.Func, ctx: *const Context) !void {
-    if (func_idx >= ctx.functypes.len) return error.FuncIndexOutOfBounds;
+fn validateFuncSection(self: *Validator, section: Section(.func)) !void {
+    try self.validateEach(
+        .func,
+        section,
+        struct {
+            fn validate(state: *State, type_idx: indices.Func, _: u32) !void {
+                if (type_idx >= state.functypes.items.len) return error.FuncIndexOutOfBounds;
+                try state.addFunc(type_idx);
+            }
+        }.validate,
+    );
 }
 
-fn validateTableSection(_: *const Validator, section: Section(.table)) !void {
-    var it = section.iter();
-    while (try it.next()) |table| try validateTable(table);
+fn validateTableSection(self: *Validator, section: Section(.table)) !void {
+    try self.validateEach(
+        .table,
+        section,
+        struct {
+            fn validate(state: *State, table: types.Table, _: u32) !void {
+                try verifyTable(table);
+                try state.addTable(table);
+            }
+        }.validate,
+    );
 }
 
-fn validateTable(table: types.Table) !void {
-    if (table.limits.max) |max| {
-        if (table.limits.min > max) return error.InvalidTableLimits;
-    }
+fn validateMemorySection(self: *Validator, section: Section(.memory)) !void {
+    try self.validateEach(
+        .memory,
+        section,
+        struct {
+            fn validate(state: *State, mem: types.Memory, _: u32) !void {
+                try verifyMemory(mem);
+                try state.addMemory(mem);
+            }
+        }.validate,
+    );
 }
 
-fn validateMemorySection(_: *const Validator, section: Section(.memory)) !void {
-    var it = section.iter();
-    while (try it.next()) |mem| try validateMemory(mem);
+fn validateGlobalSection(self: *Validator, section: Section(.global)) !void {
+    try self.validateEach(
+        .global,
+        section,
+        struct {
+            fn validate(state: *State, global: types.Global, _: u32) !void {
+                try validateConstExpr(state, global.init_expr, global.ty.valtype);
+                try state.addGlobal(global);
+            }
+        }.validate,
+    );
 }
 
-fn validateMemory(mem: types.Memory) !void {
-    if (mem.max) |max| {
-        if (mem.min > max) return error.InvalidMemoryLimits;
-    }
-    if (mem.min > MAX_PAGES) return error.MemoryMinTooLarge;
-    if (mem.max) |max| {
-        if (max > MAX_PAGES) return error.MemoryMaxTooLarge;
-    }
+fn validateExportSection(self: *Validator, section: Section(.@"export")) !void {
+    try self.validateEach(
+        .@"export",
+        section,
+        struct {
+            fn validate(state: *State, exp: types.Export, _: u32) !void {
+                switch (exp.kind) {
+                    .func => |func_idx| if (func_idx >= state.funcs.items.len) return error.ExportFuncIndexOutOfBounds,
+                    .table => |table_idx| if (table_idx >= state.tables.items.len) return error.ExportTableIndexOutOfBounds,
+                    .memory => |mem_idx| if (mem_idx >= state.memories.items.len) return error.ExportMemoryIndexOutOfBounds,
+                    .global => |global_idx| if (global_idx >= state.globals.items.len) return error.ExportGlobalIndexOutOfBounds,
+                }
+                try state.addExport(exp);
+            }
+        }.validate,
+    );
 }
 
-fn validateGlobalSection(_: *const Validator, section: Section(.global), ctx: *const Context) !void {
-    var it = section.iter();
-    while (try it.next()) |global| {
-        try validateConstExpr(global.init_expr, global.ty.valtype, ctx);
-    }
+fn validateStartSection(self: *Validator, section: Section(.start)) !void {
+    if (section.func_idx >= self.state.funcs.items.len) return error.StartFuncIndexOutOfBounds;
 }
 
-fn validateConstExpr(expr: types.Expr, expected_type: types.ValType, ctx: *const Context) !void {
+fn validateElementSection(self: *Validator, section: Section(.elem)) !void {
+    try self.validateEach(
+        .elem,
+        section,
+        struct {
+            fn validate(state: *State, elem: types.Element, _: u32) !void {
+                if (elem.table_idx >= state.tables.items.len) return error.TableIndexOutOfBounds;
+                try validateConstExpr(state, elem.offset, .i32);
+
+                const func_count = state.funcs.items.len;
+                var it = elem.indices.iter();
+                while (try it.next()) |func_idx| if (func_idx >= func_count) return error.ElementFuncIndexOutOfBounds;
+            }
+        }.validate,
+    );
+}
+
+fn validateCodeSection(self: *Validator, section: Section(.code)) !void {
+    try self.validateEach(
+        .code,
+        section,
+        struct {
+            fn validate(state: *State, body: types.FuncBody, idx: u32) !void {
+                var func_validator = try FunctionValidator.init(body, idx, state);
+                defer func_validator.deinit();
+
+                try func_validator.validate();
+            }
+        }.validate,
+    );
+}
+
+fn validateDataSection(self: *Validator, section: Section(.data)) !void {
+    try self.validateEach(
+        .data,
+        section,
+        struct {
+            fn validate(state: *State, data: types.Segment, _: u32) !void {
+                if (data.mem_idx >= state.memories.items.len) return error.MemoryIndexOutOfBounds;
+                try validateConstExpr(state, data.offset, .i32);
+            }
+        }.validate,
+    );
+}
+
+fn validateConstExpr(state: *State, expr: types.Expr, expected_type: types.ValType) !void {
     switch (expr) {
         .i32 => if (expected_type != .i32) return error.ConstExprTypeMismatch,
         .i64 => if (expected_type != .i64) return error.ConstExprTypeMismatch,
         .f32 => if (expected_type != .f32) return error.ConstExprTypeMismatch,
         .f64 => if (expected_type != .f64) return error.ConstExprTypeMismatch,
         .global => |global_idx| {
-            if (global_idx >= ctx.imports.globals.len) return error.ConstExprReferencesNonImportedGlobal;
+            if (global_idx >= state.imported_globals) return error.ConstExprReferencesNonImportedGlobal;
 
-            const global = ctx.imports.globals[global_idx];
+            const global = state.globals.items[global_idx];
             if (global.mut != .@"const") return error.ConstExprReferenceMutableGlobal;
             if (global.valtype != expected_type) return error.ConstExprTypeMismatch;
         },
     }
 }
 
-fn validateExportSection(_: *const Validator, section: Section(.@"export"), ctx: *const Context) !void {
-    var it = section.iter();
-
-    var seen_names = std.StringHashMapUnmanaged(void){};
-    defer seen_names.deinit(ctx.allocator);
-
-    while (try it.next()) |exp| {
-        if (seen_names.contains(exp.name)) return error.DuplicateExportName;
-        try seen_names.put(ctx.allocator, exp.name, {});
-
-        switch (exp.kind) {
-            .func => |func_idx| {
-                if (func_idx >= ctx.funcCount()) return error.ExportFuncIndexOutOfBounds;
-            },
-            .table => |table_idx| if (table_idx >= ctx.tableCount()) return error.ExportTableIndexOutOfBounds,
-            .memory => |mem_idx| if (mem_idx >= ctx.memoryCount()) return error.ExportMemoryIndexOutOfBounds,
-            .global => |global_idx| if (global_idx >= ctx.globalCount()) return error.ExportGlobalIndexOutOfBounds,
-        }
+fn verifyTable(table: types.Table) !void {
+    if (table.limits.max) |max| {
+        if (table.limits.min > max) return error.InvalidTableLimits;
     }
 }
 
-fn validateStartSection(_: *const Validator, section: Section(.start), ctx: *const Context) !void {
-    if (section.func_idx >= ctx.funcs.len) return error.StartFuncIndexOutOfBounds;
-}
-
-fn validateElementSection(_: *const Validator, section: Section(.elem), ctx: *const Context) !void {
-    var it = section.iter();
-    while (try it.next()) |elem| {
-        if (elem.table_idx >= ctx.tableCount()) return error.TableIndexOutOfBounds;
-        try validateConstExpr(elem.offset, .i32, ctx);
-        const func_count = ctx.funcCount();
-        var indices_it = elem.indices.iter();
-        while (try indices_it.next()) |func_idx| {
-            if (func_idx >= func_count) return error.ElementFuncIndexOutOfBounds;
-        }
-    }
-}
-
-fn validateCodeSection(self: *const Validator, section: Section(.code), ctx: *const Context) !void {
-    const config = FunctionValidator.Config{
-        .max_function_size = self.config.max_function_size,
-        .max_locals = self.config.max_locals,
-        .max_nesting_depth = self.config.max_nesting_depth,
-    };
-    var it = section.iter();
-    var i: u32 = 0;
-    while (try it.next()) |body| {
-        var func_validator = try FunctionValidator.init(
-            body,
-            i,
-            ctx,
-            config,
-        );
-        defer func_validator.deinit();
-        try func_validator.validate();
-        i += 1;
-    }
-}
-
-fn validateDataSection(_: *const Validator, section: Section(.data), ctx: *const Context) !void {
-    var it = section.iter();
-    while (try it.next()) |data| {
-        if (data.mem_idx >= ctx.memoryCount()) return error.MemoryIndexOutOfBounds;
-        try validateConstExpr(data.offset, .i32, ctx);
+fn verifyMemory(mem: types.Memory) !void {
+    if (mem.max) |max| {
+        if (mem.min > max) return error.InvalidMemoryLimits;
     }
 }
