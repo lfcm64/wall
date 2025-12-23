@@ -138,6 +138,7 @@ fn markUnreachable(self: *FunctionValidator) void {
 }
 
 fn validateInstr(self: *FunctionValidator, in: Instruction) !void {
+    std.debug.print("{}\n", .{in});
     switch (in) {
         // CONTROL
         .block => |block| try self.validateBlockTypeOp(.block, block),

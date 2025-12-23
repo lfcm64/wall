@@ -43,7 +43,7 @@ pub const Intrinsics = struct {
     @"llvm.copysign.f32": Intrinsic,
 
     @"llvm.fabs.f64": Intrinsic,
-    @"llvm.ceil.f364": Intrinsic,
+    @"llvm.ceil.f64": Intrinsic,
     @"llvm.floor.f64": Intrinsic,
     @"llvm.trunc.f64": Intrinsic,
     @"llvm.nearbyint.f64": Intrinsic,
