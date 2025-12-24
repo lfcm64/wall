@@ -30,32 +30,18 @@ pub const BlockKind = enum {
 };
 
 pub const BlockCompiler = struct {
-    fn createLocals(ctx: *Context, body: wasm.types.FuncBody, func_idx: u32, builder: types.LLVMBuilderRef) ![]types.LLVMValueRef {
-        const func = ctx.llvm_funcs.items[ctx.imported_funcs + func_idx];
-
+    fn createLocals(ctx: *Context, body: wasm.types.FuncBody, builder: types.LLVMBuilderRef) ![]types.LLVMValueRef {
         var locals: std.ArrayList(types.LLVMValueRef) = .{};
         errdefer locals.deinit(ctx.allocator);
 
-        const param_count = core.LLVMCountParams(func);
-
-        for (1..param_count) |i| {
-            const param_value = core.LLVMGetParam(func, @intCast(i));
-            const param_type = core.LLVMTypeOf(param_value);
-
-            const local = core.LLVMBuildAlloca(builder, param_type, "");
-            _ = core.LLVMBuildStore(builder, param_value, local);
-
-            try locals.append(ctx.allocator, local);
-        }
-
         var it = body.locals.iter();
+
         while (try it.next()) |local| {
             const llvm_type = conv.wasmToLLVMTypeInContext(local.valtype, ctx.llvm_context);
             const zero = core.LLVMConstNull(llvm_type);
 
             for (0..local.count) |_| {
                 const loc = core.LLVMBuildAlloca(builder, llvm_type, "");
-                // Initialize to zero (WASM spec requirement)
                 _ = core.LLVMBuildStore(builder, zero, loc);
                 try locals.append(ctx.allocator, loc);
             }
@@ -76,7 +62,9 @@ pub const BlockCompiler = struct {
 
         core.LLVMPositionBuilderAtEnd(builder, entry);
 
-        const locals = try createLocals(ctx, body, body_idx, builder);
+        const param_count = core.LLVMCountParams(func);
+
+        const locals = try createLocals(ctx, body, builder);
         defer allocator.free(locals);
 
         var stack: std.ArrayList(types.LLVMValueRef) = .{};
@@ -99,14 +87,14 @@ pub const BlockCompiler = struct {
                     const callee = ctx.llvm_funcs.items[idx];
                     const callee_type = core.LLVMGlobalGetValueType(callee);
 
-                    const param_count = core.LLVMCountParams(callee);
+                    const callee_param_count = core.LLVMCountParams(callee);
 
-                    const args = try allocator.alloc(types.LLVMValueRef, param_count);
+                    const args = try allocator.alloc(types.LLVMValueRef, callee_param_count);
                     defer allocator.free(args);
 
                     args[0] = core.LLVMGetParam(func, 0);
 
-                    var i: usize = param_count - 1;
+                    var i: usize = callee_param_count - 1;
                     while (i > 0) : (i -= 1) {
                         args[i] = stack.pop() orelse return error.StackUnderflow;
                     }
@@ -116,7 +104,7 @@ pub const BlockCompiler = struct {
                         callee_type,
                         callee,
                         args.ptr,
-                        @intCast(param_count),
+                        @intCast(callee_param_count),
                         "",
                     );
 
@@ -192,7 +180,12 @@ pub const BlockCompiler = struct {
                 },
 
                 .@"local.get" => |idx| {
-                    const local_ptr = locals[idx];
+                    if (idx + 1 < param_count) {
+                        const local = core.LLVMGetParam(func, @intCast(idx + 1));
+                        try stack.append(allocator, local);
+                        break;
+                    }
+                    const local_ptr = locals[idx - (param_count - 1)];
                     const pointee_type = core.LLVMGetAllocatedType(local_ptr);
                     const value = core.LLVMBuildLoad2(builder, pointee_type, local_ptr, "");
                     try stack.append(allocator, value);
