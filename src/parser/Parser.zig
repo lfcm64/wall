@@ -47,6 +47,7 @@ pub fn parseNext(self: *Parser) !?Event {
         },
         .header, .section => {
             const section_type: sections.SectionType = @enumFromInt(try self.reader.takeByte());
+
             if (self.state == .section and section_type != .custom) {
                 if (@intFromEnum(self.state.section) >= @intFromEnum(section_type)) {
                     return error.SectionsOutOfOrder;

@@ -43,9 +43,11 @@ const CustomSection = struct {
     bytes: []const u8,
 
     pub fn fromReader(reader: *io.Reader) !CustomSection {
+        _ = try reader.takeLeb128(u32);
         const name_size = try reader.takeLeb128(u32);
         const name = try reader.take(name_size);
 
+        _ = try reader.takeLeb128(u32);
         const bytes_size = try reader.takeLeb128(u32);
         const bytes = try reader.take(bytes_size);
         return .{

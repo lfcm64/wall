@@ -14,7 +14,7 @@ pub const Intrinsic = struct {
     ) Intrinsic {
         return .{
             .ty = func_type,
-            .func = core.LLVMAddFunction(module, name, func_type),
+            .func = core.LLVMAddFunction(module, @ptrCast(name), func_type),
         };
     }
 };
@@ -57,11 +57,15 @@ pub const Intrinsics = struct {
         const i64_ty = core.LLVMInt64TypeInContext(ctx);
         const f32_ty = core.LLVMFloatTypeInContext(ctx);
         const f64_ty = core.LLVMDoubleTypeInContext(ctx);
+        const i1_ty = core.LLVMInt1TypeInContext(ctx);
 
         var single_i32_param = [_]types.LLVMTypeRef{i32_ty};
         var single_i64_param = [_]types.LLVMTypeRef{i64_ty};
         var single_f32_param = [_]types.LLVMTypeRef{f32_ty};
         var single_f64_param = [_]types.LLVMTypeRef{f64_ty};
+
+        var ctlz_i32_params = [_]types.LLVMTypeRef{ i32_ty, i1_ty };
+        var ctlz_i64_params = [_]types.LLVMTypeRef{ i64_ty, i1_ty };
 
         var double_f32_param = [_]types.LLVMTypeRef{f32_ty} ** 2;
         var double_f64_param = [_]types.LLVMTypeRef{f64_ty} ** 2;
@@ -90,9 +94,12 @@ pub const Intrinsics = struct {
         const take_f64_ret_f64 = core.LLVMFunctionType(
             f64_ty,
             &single_f64_param,
-            3,
+            1,
             0,
         );
+
+        const ctlz_i32_type = core.LLVMFunctionType(i32_ty, &ctlz_i32_params, 2, 0);
+        const ctlz_i64_type = core.LLVMFunctionType(i64_ty, &ctlz_i64_params, 2, 0);
 
         const take_2_f64_ret_f64 = core.LLVMFunctionType(
             f64_ty,
@@ -121,14 +128,14 @@ pub const Intrinsics = struct {
         );
 
         return .{
-            .@"llvm.ctlz.i32" = Intrinsic.create(module, take_i32_ret_i32, "llvm.ctlz.i32"),
-            .@"llvm.cttz.i32" = Intrinsic.create(module, take_i32_ret_i32, "llvm.cttz.i32"),
+            .@"llvm.ctlz.i32" = Intrinsic.create(module, ctlz_i32_type, "llvm.ctlz.i32"),
+            .@"llvm.cttz.i32" = Intrinsic.create(module, ctlz_i32_type, "llvm.cttz.i32"),
             .@"llvm.ctpop.i32" = Intrinsic.create(module, take_i32_ret_i32, "llvm.ctpop.i32"),
             .@"llvm.fshl.i32" = Intrinsic.create(module, take_3_i32_ret_i32, "llvm.fshl.i32"),
             .@"llvm.fshr.i32" = Intrinsic.create(module, take_3_i32_ret_i32, "llvm.fshr.i32"),
 
-            .@"llvm.ctlz.i64" = Intrinsic.create(module, take_i64_ret_i64, "llvm.ctlz.i64"),
-            .@"llvm.cttz.i64" = Intrinsic.create(module, take_i64_ret_i64, "llvm.cttz.i64"),
+            .@"llvm.ctlz.i64" = Intrinsic.create(module, ctlz_i64_type, "llvm.ctlz.i64"),
+            .@"llvm.cttz.i64" = Intrinsic.create(module, ctlz_i64_type, "llvm.cttz.i64"),
             .@"llvm.ctpop.i64" = Intrinsic.create(module, take_i64_ret_i64, "llvm.ctpop.i64"),
             .@"llvm.fshl.i64" = Intrinsic.create(module, take_3_i64_ret_i64, "llvm.fshl.i64"),
             .@"llvm.fshr.i64" = Intrinsic.create(module, take_3_i64_ret_i64, "llvm.fshr.i64"),
