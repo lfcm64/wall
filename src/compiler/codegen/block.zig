@@ -183,7 +183,7 @@ pub const BlockCompiler = struct {
                     if (idx + 1 < param_count) {
                         const local = core.LLVMGetParam(func, @intCast(idx + 1));
                         try stack.append(allocator, local);
-                        break;
+                        continue;
                     }
                     const local_ptr = locals[idx - (param_count - 1)];
                     const pointee_type = core.LLVMGetAllocatedType(local_ptr);
