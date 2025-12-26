@@ -3,9 +3,9 @@ const Compiler = @This();
 const std = @import("std");
 const wasm = @import("../wasm/wasm.zig");
 
-const function = @import("codegen/function.zig");
-const block = @import("codegen/block.zig");
 const exports = @import("codegen/exports.zig");
+const function = @import("codegen/function.zig");
+const code = @import("codegen/code.zig");
 
 const Context = @import("Context.zig");
 const ModuleContext = @import("../parser/Parser.zig");
@@ -82,6 +82,6 @@ fn compileCodeSection(self: *Compiler, section: Section(.code)) !void {
     try self.compileEach(
         .code,
         section,
-        block.BlockCompiler.compile,
+        code.CodeCompiler.compile,
     );
 }

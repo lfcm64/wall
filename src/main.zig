@@ -20,7 +20,7 @@ pub fn main() !void {
     const allocator = gpa.allocator();
     defer _ = gpa.deinit();
 
-    const source = @embedFile("tests/add.wasm");
+    const source = @embedFile("tests/fib.wasm");
 
     var parser = Parser.init(source);
 
@@ -46,21 +46,23 @@ pub fn main() !void {
     ) != 0) {
         defer core.LLVMDisposeMessage(error_msg);
         std.debug.print("Empty module invalid: {s}\n", .{error_msg});
+
+        const module_str = core.LLVMPrintModuleToString(compiler.ctx.llvm_module);
+        defer core.LLVMDisposeMessage(module_str);
+        std.debug.print("=== Module IR ===\n{s}\n", .{module_str});
+
         return;
     }
 
-    //const module_str = core.LLVMPrintModuleToString(compiler.ctx.llvm_module);
-    //defer core.LLVMDisposeMessage(module_str);
-    //std.debug.print("=== Module IR ===\n{s}\n", .{module_str});
-
     var runtime = try Runtime.init(compiler.ctx.llvm_module);
 
-    const AddFn = *const fn (*anyopaque, i32, i32) callconv(.c) i32;
+    const FibFn = *const fn (*anyopaque, i32) callconv(.c) i32;
 
-    const add_fn = try runtime.getFn("add", AddFn);
+    const fib = try runtime.getFn("fib", FibFn);
 
     const vmctx: *anyopaque = undefined;
 
-    const result = add_fn(vmctx, 10, 5);
-    std.debug.print("add(10, 5) = {}\n", .{result});
+    const result = fib(vmctx, 20);
+    std.debug.print("fib(20) = {}\n", .{result});
 }
+

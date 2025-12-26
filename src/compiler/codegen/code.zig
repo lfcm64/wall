@@ -13,23 +13,44 @@ const core = llvm.core;
 
 const Allocator = std.mem.Allocator;
 
-pub const BlockContext = struct {
-    kind: BlockKind,
-    continue_block: types.LLVMBasicBlockRef,
-    break_block: types.LLVMBasicBlockRef,
-    result_type: ?types.LLVMTypeRef,
-    stack_height: usize,
-    else_block: ?types.LLVMBasicBlockRef,
+pub const FunctionCtx = struct {
+    ty: types.LLVMTypeRef,
+    func: types.LLVMValueRef,
 };
 
-pub const BlockKind = enum {
-    block,
-    loop,
-    if_then,
-    if_else,
-};
+pub const CodeCompiler = struct {
+    pub fn compile(ctx: *Context, body: wasm.types.FuncBody, idx: u32) !void {
+        const func = ctx.llvm_funcs.items[ctx.imported_funcs + idx];
+        const func_type = core.LLVMGlobalGetValueType(func);
 
-pub const BlockCompiler = struct {
+        const entry = core.LLVMAppendBasicBlockInContext(ctx.llvm_context, func, "");
+
+        const builder = core.LLVMCreateBuilder();
+        defer core.LLVMDisposeBuilder(builder);
+
+        core.LLVMPositionBuilderAtEnd(builder, entry);
+
+        const locals = try createLocals(ctx, body, builder);
+        defer ctx.allocator.free(locals);
+
+        var stack: std.ArrayList(types.LLVMValueRef) = .{};
+        defer stack.deinit(ctx.allocator);
+
+        const func_ctx = FunctionCtx{ .ty = func_type, .func = func };
+
+        var instrs = instr.Iterator.init(body.code);
+
+        _ = try BlockCompiler.compile(
+            ctx,
+            func_ctx,
+            locals,
+            &stack,
+            &instrs,
+            entry,
+            builder,
+        );
+    }
+
     fn createLocals(ctx: *Context, body: wasm.types.FuncBody, builder: types.LLVMBuilderRef) ![]types.LLVMValueRef {
         var locals: std.ArrayList(types.LLVMValueRef) = .{};
         errdefer locals.deinit(ctx.allocator);
@@ -48,53 +69,56 @@ pub const BlockCompiler = struct {
         }
         return locals.toOwnedSlice(ctx.allocator);
     }
+};
 
-    pub fn compile(ctx: *Context, body: wasm.types.FuncBody, body_idx: u32) !void {
+pub const BlockExit = enum {
+    end,
+    @"else",
+    @"unreachable",
+    branch,
+};
+
+pub const BlockResult = struct {
+    exit: BlockExit,
+    terminated: bool,
+};
+
+pub const BlockCompiler = struct {
+    pub fn compile(
+        ctx: *Context,
+        func_ctx: FunctionCtx,
+        locals: []types.LLVMValueRef,
+        stack: *std.ArrayList(types.LLVMValueRef),
+        instrs: *instr.Iterator,
+        current_bb: types.LLVMBasicBlockRef,
+        builder: types.LLVMBuilderRef,
+    ) !BlockResult {
+        const llvm_ctx = ctx.llvm_context;
+
+        const func = func_ctx.func;
         const allocator = ctx.allocator;
 
-        const func = ctx.llvm_funcs.items[ctx.imported_funcs + body_idx];
-        const func_type = core.LLVMGlobalGetValueType(func);
+        core.LLVMPositionBuilderAtEnd(builder, current_bb);
 
-        const entry = core.LLVMAppendBasicBlockInContext(ctx.llvm_context, func, "");
-
-        const builder = core.LLVMCreateBuilder();
-        defer core.LLVMDisposeBuilder(builder);
-
-        core.LLVMPositionBuilderAtEnd(builder, entry);
-
-        const param_count = core.LLVMCountParams(func);
-
-        const locals = try createLocals(ctx, body, builder);
-        defer allocator.free(locals);
-
-        var stack: std.ArrayList(types.LLVMValueRef) = .{};
-        defer stack.deinit(allocator);
-
-        var block_stack: std.ArrayList(BlockContext) = .{};
-        defer block_stack.deinit(allocator);
-
-        const return_type = core.LLVMGetReturnType(func_type);
+        const return_type = core.LLVMGetReturnType(func_ctx.ty);
         const has_return = core.LLVMGetTypeKind(return_type) != types.LLVMTypeKind.LLVMVoidTypeKind;
 
         var block_terminated = false;
-        var current_block = entry;
 
-        var it = instr.Iterator.init(body.code);
-
-        while (try it.next()) |in| {
+        while (try instrs.next()) |in| {
             switch (in) {
                 .call => |idx| {
                     const callee = ctx.llvm_funcs.items[idx];
                     const callee_type = core.LLVMGlobalGetValueType(callee);
 
-                    const callee_param_count = core.LLVMCountParams(callee);
+                    const param_count = core.LLVMCountParams(callee);
 
-                    const args = try allocator.alloc(types.LLVMValueRef, callee_param_count);
+                    const args = try allocator.alloc(types.LLVMValueRef, param_count);
                     defer allocator.free(args);
 
                     args[0] = core.LLVMGetParam(func, 0);
 
-                    var i: usize = callee_param_count - 1;
+                    var i: usize = param_count - 1;
                     while (i > 0) : (i -= 1) {
                         args[i] = stack.pop() orelse return error.StackUnderflow;
                     }
@@ -104,7 +128,7 @@ pub const BlockCompiler = struct {
                         callee_type,
                         callee,
                         args.ptr,
-                        @intCast(callee_param_count),
+                        @intCast(param_count),
                         "",
                     );
 
@@ -114,49 +138,76 @@ pub const BlockCompiler = struct {
                     }
                 },
 
-                .@"if" => |block_type| {
-                    const cond = stack.pop() orelse return error.StackUnderflow;
+                .@"if" => |_| {
+                    const cond = stack.pop().?;
 
-                    const then_block = core.LLVMAppendBasicBlockInContext(
-                        ctx.llvm_context,
-                        func,
-                        "if.then",
-                    );
-                    const else_block = core.LLVMAppendBasicBlockInContext(
-                        ctx.llvm_context,
-                        func,
-                        "if.else",
-                    );
-                    const merge_block = core.LLVMAppendBasicBlockInContext(
-                        ctx.llvm_context,
-                        func,
-                        "if.end",
-                    );
+                    const then_bb = core.LLVMAppendBasicBlockInContext(llvm_ctx, func, "");
+                    const else_bb = core.LLVMAppendBasicBlockInContext(llvm_ctx, func, "");
+                    const merge_bb = core.LLVMAppendBasicBlockInContext(llvm_ctx, func, "");
 
-                    const bool_cond = core.LLVMBuildICmp(
+                    _ = core.LLVMBuildCondBr(builder, cond, then_bb, else_bb);
+                    core.LLVMPositionBuilderAtEnd(builder, then_bb);
+
+                    const stack_len_before = stack.items.len;
+
+                    var then_stack = try stack.clone(allocator);
+                    defer then_stack.deinit(allocator);
+
+                    const then_result = try compile(
+                        ctx,
+                        func_ctx,
+                        locals,
+                        &then_stack,
+                        instrs,
+                        then_bb,
                         builder,
-                        types.LLVMIntPredicate.LLVMIntNE,
-                        cond,
-                        core.LLVMConstInt(core.LLVMTypeOf(cond), 0, 0),
-                        "",
                     );
+                    if (!then_result.terminated) _ = core.LLVMBuildBr(builder, merge_bb);
 
-                    _ = core.LLVMBuildCondBr(builder, bool_cond, then_block, else_block);
-                    core.LLVMPositionBuilderAtEnd(builder, then_block);
+                    var else_stack = try stack.clone(allocator);
+                    defer else_stack.deinit(allocator);
 
-                    const if_result_type = switch (block_type) {
-                        .empty => null,
-                        .valtype => |vt| conv.wasmToLLVMTypeInContext(vt, ctx.llvm_context),
-                    };
+                    if (then_result.exit == .@"else") {
+                        const else_result = try compile(
+                            ctx,
+                            func_ctx,
+                            locals,
+                            &else_stack,
+                            instrs,
+                            else_bb,
+                            builder,
+                        );
+                        if (!else_result.terminated) _ = core.LLVMBuildBr(builder, merge_bb);
+                    } else {
+                        core.LLVMPositionBuilderAtEnd(builder, else_bb);
+                        _ = core.LLVMBuildBr(builder, merge_bb);
+                    }
 
-                    try block_stack.append(allocator, .{
-                        .kind = .if_then,
-                        .continue_block = merge_block,
-                        .break_block = merge_block,
-                        .result_type = if_result_type,
-                        .stack_height = stack.items.len,
-                        .else_block = else_block,
-                    });
+                    core.LLVMPositionBuilderAtEnd(builder, merge_bb);
+                    const values_produced = then_stack.items.len - stack_len_before;
+
+                    if (then_result.exit != .@"else") {
+                        var i: usize = 0;
+                        while (i < values_produced) : (i += 1) {
+                            const then_val = then_stack.items[stack_len_before + i];
+                            try stack.append(allocator, then_val);
+                        }
+                        continue;
+                    }
+
+                    for (0..values_produced) |i| {
+                        const then_val = then_stack.items[stack_len_before + i];
+                        const else_val = else_stack.items[stack_len_before + i];
+
+                        const phi = core.LLVMBuildPhi(builder, core.LLVMTypeOf(then_val), "");
+
+                        var values = [_]types.LLVMValueRef{ then_val, else_val };
+                        var blocks = [_]types.LLVMBasicBlockRef{ then_bb, else_bb };
+
+                        core.LLVMAddIncoming(phi, &values, &blocks, 2);
+
+                        try stack.append(allocator, phi);
+                    }
                 },
 
                 .@"return" => {
@@ -169,17 +220,13 @@ pub const BlockCompiler = struct {
                     block_terminated = true;
                 },
 
-                .end => {
-                    if (!block_terminated) {
-                        const block = block_stack.pop().?;
-                        _ = core.LLVMBuildBr(builder, block.continue_block);
-                        current_block = block.continue_block;
-                        core.LLVMPositionBuilderAtEnd(builder, current_block);
-                    }
-                    block_terminated = false;
-                },
+                .end => return .{ .exit = .end, .terminated = block_terminated },
+
+                .@"else" => return .{ .exit = .@"else", .terminated = block_terminated },
 
                 .@"local.get" => |idx| {
+                    const param_count = core.LLVMCountParams(func);
+
                     if (idx + 1 < param_count) {
                         const local = core.LLVMGetParam(func, @intCast(idx + 1));
                         try stack.append(allocator, local);
@@ -193,7 +240,7 @@ pub const BlockCompiler = struct {
 
                 .@"i32.const" => |value| {
                     const const_val = core.LLVMConstInt(
-                        core.LLVMInt32Type(),
+                        core.LLVMInt32TypeInContext(llvm_ctx),
                         @intCast(value),
                         0,
                     );
@@ -202,7 +249,7 @@ pub const BlockCompiler = struct {
 
                 .@"i64.const" => |value| {
                     const const_val = core.LLVMConstInt(
-                        core.LLVMInt64Type(),
+                        core.LLVMInt64TypeInContext(llvm_ctx),
                         @intCast(value),
                         0,
                     );
@@ -210,22 +257,31 @@ pub const BlockCompiler = struct {
                 },
 
                 .@"f32.const" => |value| {
-                    const const_val = core.LLVMConstReal(core.LLVMFloatType(), value);
+                    const const_val = core.LLVMConstReal(
+                        core.LLVMFloatTypeInContext(llvm_ctx),
+                        value,
+                    );
                     try stack.append(allocator, const_val);
                 },
 
                 .@"f64.const" => |value| {
-                    const const_val = core.LLVMConstReal(core.LLVMDoubleType(), value);
+                    const const_val = core.LLVMConstReal(
+                        core.LLVMDoubleTypeInContext(llvm_ctx),
+                        value,
+                    );
                     try stack.append(allocator, const_val);
                 },
 
                 .@"i32.eqz", .@"i64.eqz" => {
                     const val = stack.pop().?;
+                    const val_type = core.LLVMTypeOf(val);
+                    const zero = core.LLVMConstInt(val_type, 0, 0);
+
                     const result = core.LLVMBuildICmp(
                         builder,
                         types.LLVMIntPredicate.LLVMIntEQ,
                         val,
-                        core.LLVMConstInt(core.LLVMInt32Type(), 0, 0),
+                        zero,
                         "",
                     );
                     try stack.append(allocator, result);
@@ -1169,13 +1225,7 @@ pub const BlockCompiler = struct {
                 else => unreachable,
             }
         }
-        //const current_block = core.LLVMGetInsertBlock(builder);
-        //const terminator = core.LLVMGetBasicBlockTerminator(current_block);
-        //if (terminator == null) {
-        //    _ = core.LLVMBuildBr(builder, exit_block);
-        //}
-
-        //core.LLVMPositionBuilderAtEnd(builder, exit_block);
+        unreachable;
     }
 };
 
