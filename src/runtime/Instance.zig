@@ -1,4 +1,4 @@
-const Runtime = @This();
+const Instance = @This();
 
 const std = @import("std");
 const llvm = @import("llvm");
@@ -11,7 +11,7 @@ const target = llvm.target;
 module: types.LLVMModuleRef,
 eng: types.LLVMExecutionEngineRef,
 
-pub fn init(module: types.LLVMModuleRef) !@This() {
+pub fn init(module: types.LLVMModuleRef) !Instance {
     _ = target.LLVMInitializeNativeTarget();
     _ = target.LLVMInitializeNativeAsmPrinter();
     _ = target.LLVMInitializeNativeAsmParser();
@@ -47,14 +47,13 @@ pub fn init(module: types.LLVMModuleRef) !@This() {
     };
 }
 
-pub fn deinit(self: *@This()) void {
+pub fn deinit(self: *Instance) void {
     engine.LLVMDisposeExecutionEngine(self.eng);
 }
 
-pub fn getFn(self: *@This(), comptime func_name: []const u8, comptime Fn: type) !Fn {
+pub fn getFunction(self: *Instance, comptime func_name: []const u8, comptime Fn: type) !Fn {
     const func_addr = engine.LLVMGetFunctionAddress(self.eng, @ptrCast(func_name));
-    if (func_addr == 0) {
-        return error.FunctionNotFound;
-    }
+    if (func_addr == 0) return error.FunctionNotFound;
+
     return @ptrFromInt(func_addr);
 }

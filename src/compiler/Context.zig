@@ -35,7 +35,6 @@ pub fn init(allocator: Allocator) Context {
 }
 
 pub fn deinit(self: *Context) void {
-    core.LLVMDisposeModule(self.llvm_module);
     core.LLVMContextDispose(self.llvm_context);
 
     self.functypes.deinit(self.allocator);
