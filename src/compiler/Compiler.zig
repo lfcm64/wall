@@ -8,8 +8,6 @@ const function = @import("codegen/function.zig");
 const code = @import("codegen/code.zig");
 
 const Context = @import("Context.zig");
-const ModuleContext = @import("../parser/Parser.zig");
-
 const Event = @import("../parser/event.zig").Event;
 
 const sections = wasm.sections;

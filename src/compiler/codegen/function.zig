@@ -19,13 +19,13 @@ pub const FunctionTypeCompiler = struct {
 
         param_types[0] = core.LLVMPointerTypeInContext(ctx.llvm_context, 0);
         for (0..param_count) |i| {
-            param_types[i + 1] = conv.wasmToLLVMTypeInContext(func_type.params[i], ctx.llvm_context);
+            param_types[i + 1] = conv.typeToLLVM(func_type.params[i], ctx.llvm_context);
         }
 
         if (func_type.results.len > 1) @panic("compiler does not support multi return function");
         const return_type = switch (func_type.results.len) {
             0 => core.LLVMVoidTypeInContext(ctx.llvm_context),
-            else => conv.wasmToLLVMTypeInContext(func_type.results[0], ctx.llvm_context),
+            else => conv.typeToLLVM(func_type.results[0], ctx.llvm_context),
         };
 
         const llvm_func_type = core.LLVMFunctionType(

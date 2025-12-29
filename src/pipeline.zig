@@ -12,7 +12,7 @@ pub fn Pipeline(comptime EventHandlerTypes: []const type) type {
             return .{ .handlers = handlers };
         }
 
-        pub fn run(self: *Self, parser: *Parser) !void {
+        pub fn exec(self: *Self, parser: *Parser) !void {
             while (try parser.parseNext()) |event| {
                 inline for (self.handlers) |handler| try handler.onEvent(event);
             }
