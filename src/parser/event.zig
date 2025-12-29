@@ -1,4 +1,4 @@
-const wasm = @import("../wasm/wasm.zig");
+const wasm = @import("wasm");
 
 const sections = wasm.sections;
 const types = wasm.types;

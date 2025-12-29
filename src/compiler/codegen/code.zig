@@ -1,20 +1,110 @@
 const std = @import("std");
 const llvm = @import("llvm");
-const wasm = @import("../../wasm/wasm.zig");
+const wasm = @import("wasm");
 const conv = @import("conv.zig");
 
 const Intrinsic = @import("../intrinsics.zig").Intrinsic;
 const Context = @import("../Context.zig");
-const State = @import("../State.zig");
+
+const Allocator = std.mem.Allocator;
 
 const instr = wasm.instr;
 const types = llvm.types;
 const core = llvm.core;
 
-const Allocator = std.mem.Allocator;
+const Value = types.LLVMValueRef;
+const BasicBlock = types.LLVMBasicBlockRef;
 
-fn createLocals(ctx: *Context, body: wasm.types.FuncBody, builder: types.LLVMBuilderRef) ![]types.LLVMValueRef {
-    var locals: std.ArrayList(types.LLVMValueRef) = .{};
+pub const ControlFrame = union(enum) {
+    block: struct {
+        next: BasicBlock,
+        phi: ?Value,
+    },
+
+    loop: struct {
+        header: BasicBlock,
+        next: BasicBlock,
+        loop_phi: ?Value,
+        phi: ?Value,
+    },
+
+    if_else: struct {
+        then: BasicBlock,
+        @"else": BasicBlock,
+        has_else: bool = false,
+        next: BasicBlock,
+        phi: ?Value,
+    },
+
+    pub fn next(self: *const ControlFrame) BasicBlock {
+        return switch (self.*) {
+            .block => |block| block.next,
+            .loop => |loop| loop.next,
+            .if_else => |ie| ie.next,
+        };
+    }
+
+    pub fn brDest(self: *const ControlFrame) BasicBlock {
+        return switch (self.*) {
+            .block => |block| block.next,
+            .loop => |loop| loop.header,
+            .if_else => |ie| ie.next,
+        };
+    }
+
+    pub fn phi(self: *const ControlFrame) ?Value {
+        return switch (self.*) {
+            .block => |block| block.phi,
+            .loop => |loop| loop.loop_phi,
+            .if_else => |ie| ie.phi,
+        };
+    }
+};
+
+pub const State = struct {
+    stack: std.ArrayList(Value) = .{},
+    ctrl_stack: std.ArrayList(ControlFrame) = .{},
+    reachable: bool = true,
+
+    pub fn deinit(self: *State, allocator: Allocator) void {
+        self.stack.deinit(allocator);
+        self.ctrl_stack.deinit(allocator);
+    }
+
+    pub fn push(self: *State, allocator: Allocator, value: Value) !void {
+        try self.stack.append(allocator, value);
+    }
+
+    pub fn pop(self: *State) ?Value {
+        return self.stack.pop();
+    }
+
+    pub fn peek(self: *const State) ?Value {
+        if (self.stack.items.len == 0) return null;
+        return self.stack.items[self.stack.items.len - 1];
+    }
+
+    pub fn pushFrame(self: *State, allocator: std.mem.Allocator, frame: ControlFrame) !void {
+        try self.ctrl_stack.append(allocator, frame);
+    }
+
+    pub fn popFrame(self: *State) ?ControlFrame {
+        return self.ctrl_stack.pop();
+    }
+
+    pub fn frameAtDepth(self: *State, depth: usize) ?*ControlFrame {
+        if (depth >= self.ctrl_stack.items.len) return null;
+        return &self.ctrl_stack.items[self.ctrl_stack.items.len - 1 - depth];
+    }
+
+    pub fn currentFrame(self: *State) ?*ControlFrame {
+        if (self.ctrl_stack.items.len == 0) return null;
+        return &self.ctrl_stack.items[self.ctrl_stack.items.len - 1];
+    }
+};
+
+fn createLocals(ctx: *Context, body: wasm.types.FuncBody, builder: types.LLVMBuilderRef) ![]Value {
+    var locals: std.ArrayList(Value) = .{};
     errdefer locals.deinit(ctx.allocator);
 
     var it = body.locals.iter();
@@ -41,7 +131,7 @@ pub const CodeCompiler = struct {
         const llvm_ctx = ctx.llvm_context;
         const allocator = ctx.allocator;
 
-        const func = ctx.llvm_funcs.items[ctx.imported_funcs + idx];
+        const func = ctx.funcs.items[ctx.imported_funcs + idx];
         const func_type = core.LLVMGlobalGetValueType(func);
 
         const entry_block = core.LLVMAppendBasicBlockInContext(llvm_ctx, func, "");
@@ -133,9 +223,9 @@ pub const CodeCompiler = struct {
                         "",
                     );
 
-                    const then_block = core.LLVMAppendBasicBlockInContext(llvm_ctx, func, "if.then");
-                    const else_block = core.LLVMAppendBasicBlockInContext(llvm_ctx, func, "if.else");
-                    const merge_block = core.LLVMAppendBasicBlockInContext(llvm_ctx, func, "if.merge");
+                    const then_block = core.LLVMAppendBasicBlockInContext(llvm_ctx, func, "");
+                    const else_block = core.LLVMAppendBasicBlockInContext(llvm_ctx, func, "");
+                    const merge_block = core.LLVMAppendBasicBlockInContext(llvm_ctx, func, "");
 
                     _ = core.LLVMBuildCondBr(builder, cond_bool, then_block, else_block);
 
@@ -162,8 +252,8 @@ pub const CodeCompiler = struct {
                     if (state.reachable) {
                         if (frame.phi()) |phi_value| {
                             const value = state.pop() orelse return error.StackUnderflow;
-                            var values = [_]types.LLVMValueRef{value};
-                            var blocks = [_]types.LLVMBasicBlockRef{current_block};
+                            var values = [_]Value{value};
+                            var blocks = [_]BasicBlock{current_block};
                             core.LLVMAddIncoming(phi_value, &values, &blocks, 1);
                         }
                     }
@@ -178,8 +268,8 @@ pub const CodeCompiler = struct {
                     if (state.reachable and current_block != null) {
                         if (frame.phi()) |phi_value| {
                             const value = state.pop().?;
-                            var values = [_]types.LLVMValueRef{value};
-                            var blocks = [_]types.LLVMBasicBlockRef{current_block.?};
+                            var values = [_]Value{value};
+                            var blocks = [_]BasicBlock{current_block.?};
                             core.LLVMAddIncoming(phi_value, &values, &blocks, 1);
                         }
                         _ = core.LLVMBuildBr(builder, frame.next());
@@ -193,7 +283,7 @@ pub const CodeCompiler = struct {
                     core.LLVMPositionBuilderAtEnd(builder, frame.next());
                     state.reachable = true;
 
-                    const function_end = state.control_stack.items.len == 0;
+                    const function_end = state.ctrl_stack.items.len == 0;
                     if (!function_end) {
                         if (frame.phi()) |phi_value| try state.push(allocator, phi_value);
                     }
@@ -207,8 +297,8 @@ pub const CodeCompiler = struct {
 
                     if (frame.phi()) |phi_value| {
                         const value = state.pop().?;
-                        var values = [_]types.LLVMValueRef{value};
-                        var blocks = [_]types.LLVMBasicBlockRef{current_block};
+                        var values = [_]Value{value};
+                        var blocks = [_]BasicBlock{current_block};
                         core.LLVMAddIncoming(phi_value, &values, &blocks, 1);
                     }
 
@@ -235,8 +325,8 @@ pub const CodeCompiler = struct {
 
                     if (frame.phi()) |phi_value| {
                         const value = state.pop().?;
-                        var values = [_]types.LLVMValueRef{value};
-                        var blocks = [_]types.LLVMBasicBlockRef{current_block};
+                        var values = [_]Value{value};
+                        var blocks = [_]BasicBlock{current_block};
                         core.LLVMAddIncoming(phi_value, &values, &blocks, 1);
                     }
 
@@ -248,12 +338,12 @@ pub const CodeCompiler = struct {
 
                 .@"return" => {
                     const current_block = core.LLVMGetInsertBlock(builder).?;
-                    const func_frame = &state.control_stack.items[0];
+                    const func_frame = &state.ctrl_stack.items[0];
 
                     if (func_frame.phi()) |phi_value| {
                         const value = state.pop() orelse return error.StackUnderflow;
-                        var values = [_]types.LLVMValueRef{value};
-                        var blocks = [_]types.LLVMBasicBlockRef{current_block};
+                        var values = [_]Value{value};
+                        var blocks = [_]BasicBlock{current_block};
                         core.LLVMAddIncoming(phi_value, &values, &blocks, 1);
                     }
                     _ = core.LLVMBuildBr(builder, func_frame.next());
@@ -261,7 +351,7 @@ pub const CodeCompiler = struct {
                 },
 
                 .call => |func_idx| {
-                    const callee = ctx.llvm_funcs.items[func_idx];
+                    const callee = ctx.funcs.items[func_idx];
                     const callee_type = core.LLVMGlobalGetValueType(callee);
 
                     const param_count = core.LLVMCountParams(callee);

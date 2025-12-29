@@ -1,7 +1,7 @@
 const Parser = @This();
 
 const std = @import("std");
-const wasm = @import("../wasm/wasm.zig");
+const wasm = @import("wasm");
 
 const Event = @import("event.zig").Event;
 

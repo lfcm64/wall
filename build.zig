@@ -10,9 +10,16 @@ pub fn build(b: *std.Build) void {
     });
     const llvm_mod = llvm_dep.module("llvm");
 
+    const wasm_mod = b.addModule("wasm", .{
+        .root_source_file = b.path("src/wasm/wasm.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+
     const mod = b.addModule("wall", .{
         .root_source_file = b.path("src/main.zig"),
         .target = target,
+        .optimize = optimize,
     });
 
     const exe = b.addExecutable(.{
@@ -27,6 +34,7 @@ pub fn build(b: *std.Build) void {
         }),
     });
 
+    exe.root_module.addImport("wasm", wasm_mod);
     exe.root_module.addImport("llvm", llvm_mod);
     b.installArtifact(exe);
 
@@ -41,4 +49,3 @@ pub fn build(b: *std.Build) void {
         run_cmd.addArgs(args);
     }
 }
-

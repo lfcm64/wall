@@ -1,7 +1,7 @@
-const State = @This();
+const Context = @This();
 
 const std = @import("std");
-const wasm = @import("../wasm/wasm.zig");
+const wasm = @import("wasm");
 
 const types = wasm.types;
 const sections = wasm.sections;
@@ -26,11 +26,11 @@ imported_globals: u32 = 0,
 imports: std.StringArrayHashMapUnmanaged(void) = .{},
 exports: std.StringArrayHashMapUnmanaged(void) = .{},
 
-pub fn init(allocator: std.mem.Allocator) State {
+pub fn init(allocator: std.mem.Allocator) Context {
     return .{ .allocator = allocator };
 }
 
-pub fn deinit(self: *State) void {
+pub fn deinit(self: *Context) void {
     self.functypes.deinit(self.allocator);
     self.funcs.deinit(self.allocator);
     self.tables.deinit(self.allocator);
@@ -41,31 +41,31 @@ pub fn deinit(self: *State) void {
     self.exports.deinit(self.allocator);
 }
 
-pub fn addFuncType(self: *State, func_type: types.FuncType) !void {
+pub fn addFuncType(self: *Context, func_type: types.FuncType) !void {
     try self.functypes.append(self.allocator, func_type);
 }
 
-pub fn addFunc(self: *State, type_idx: u32) !void {
+pub fn addFunc(self: *Context, type_idx: u32) !void {
     try self.funcs.append(self.allocator, type_idx);
 }
 
-pub fn addTable(self: *State, table: types.Table) !void {
+pub fn addTable(self: *Context, table: types.Table) !void {
     try self.tables.append(self.allocator, table);
 }
 
-pub fn addMemory(self: *State, memory: types.Memory) !void {
+pub fn addMemory(self: *Context, memory: types.Memory) !void {
     try self.memories.append(self.allocator, memory);
 }
 
-pub fn addGlobal(self: *State, global: types.Global) !void {
+pub fn addGlobal(self: *Context, global: types.Global) !void {
     try self.globals.append(self.allocator, global.ty);
 }
 
-pub fn addExport(self: *State, exp: types.Export) !void {
+pub fn addExport(self: *Context, exp: types.Export) !void {
     try self.exports.put(self.allocator, exp.name, {});
 }
 
-pub fn addImport(self: *State, import: types.Import) !void {
+pub fn addImport(self: *Context, import: types.Import) !void {
     const key = try std.fmt.allocPrint(
         self.allocator,
         "{s}.{s}",
@@ -95,7 +95,7 @@ pub fn addImport(self: *State, import: types.Import) !void {
     }
 }
 
-pub fn typeOfFunc(self: *State, idx: u32) types.FuncType {
+pub fn typeOfFunc(self: *Context, idx: u32) types.FuncType {
     const type_idx = self.funcs.items[idx];
     return self.functypes.items[type_idx];
 }

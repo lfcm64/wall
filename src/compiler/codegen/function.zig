@@ -1,7 +1,7 @@
 const std = @import("std");
 
 const llvm = @import("llvm");
-const wasm = @import("../../wasm/wasm.zig");
+const wasm = @import("wasm");
 const conv = @import("conv.zig");
 
 const Context = @import("../Context.zig");
@@ -40,7 +40,7 @@ pub const FunctionTypeCompiler = struct {
 
 pub const FunctionCompiler = struct {
     pub fn compile(ctx: *Context, type_idx: indices.Func, _: u32) !void {
-        const func_type = ctx.llvm_types.items[type_idx];
+        const func_type = ctx.functypes.items[type_idx];
 
         const func = core.LLVMAddFunction(ctx.llvm_module, "", func_type);
         core.LLVMSetLinkage(func, types.LLVMLinkage.LLVMInternalLinkage);

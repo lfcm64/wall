@@ -1,6 +1,6 @@
 const std = @import("std");
 const llvm = @import("llvm");
-const wasm = @import("../../wasm/wasm.zig");
+const wasm = @import("wasm");
 
 const core = llvm.core;
 const types = llvm.types;

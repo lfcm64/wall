@@ -1,7 +1,7 @@
 const Compiler = @This();
 
 const std = @import("std");
-const wasm = @import("../wasm/wasm.zig");
+const wasm = @import("wasm");
 
 const exports = @import("codegen/exports.zig");
 const function = @import("codegen/function.zig");

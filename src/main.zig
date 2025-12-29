@@ -37,6 +37,6 @@ pub fn main() !void {
 
     const fib = try runtime.getFn("fib", *const fn (*anyopaque, i32) callconv(.c) i32);
 
-    const result = fib(undefined, 10);
-    std.debug.print("fib(10) = {}\n", .{result});
+    const result = fib(undefined, 8);
+    std.debug.print("fib(8) = {}\n", .{result});
 }
