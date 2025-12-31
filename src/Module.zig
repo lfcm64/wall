@@ -37,5 +37,5 @@ pub fn instantiate(self: *Module) !Instance {
         try self.validator.onEvent(event);
         try self.compiler.onEvent(event);
     }
-    return Instance.init(self.compiler.ctx.llvm_module);
+    return Instance.init(self.allocator, self.compiler.ctx.llvm_module);
 }

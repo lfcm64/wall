@@ -1,9 +1,9 @@
 const std = @import("std");
 const llvm = @import("llvm");
 const wasm = @import("wasm");
-const conv = @import("conv.zig");
+const conv = @import("../convertions.zig");
 
-const Intrinsic = @import("../intrinsics.zig").Intrinsic;
+const Intrinsics = @import("intrinsics.zig").Intrinsics;
 const Context = @import("../Context.zig");
 
 const Allocator = std.mem.Allocator;
@@ -148,8 +148,16 @@ pub const CodeCompiler = struct {
         const return_type = core.LLVMGetReturnType(func_type);
         const is_void = core.LLVMGetTypeKind(return_type) == types.LLVMTypeKind.LLVMVoidTypeKind;
 
-        const return_phi = if (!is_void) core.LLVMBuildPhi(builder, return_type, "") else null;
-        if (return_phi) |phi| _ = core.LLVMBuildRet(builder, phi) else _ = core.LLVMBuildRetVoid(builder);
+        const return_phi: ?types.LLVMValueRef = if (!is_void) blk: {
+            const phi = core.LLVMBuildPhi(builder, return_type, "");
+            break :blk if (phi != null) phi else null;
+        } else null;
+
+        if (return_phi) |phi| {
+            _ = core.LLVMBuildRet(builder, phi);
+        } else {
+            _ = core.LLVMBuildRetVoid(builder);
+        }
 
         var state = State{};
         defer state.deinit(allocator);
@@ -391,6 +399,25 @@ pub const CodeCompiler = struct {
                     const pointee_type = core.LLVMGetAllocatedType(local_ptr);
                     const value = core.LLVMBuildLoad2(builder, pointee_type, local_ptr, "");
                     try state.push(allocator, value);
+                },
+
+                .@"i32.store" => |mem_arg| {
+                    const val = state.pop().?;
+                    const addr = state.pop().?;
+
+                    const effective_offset = core.LLVMBuildAdd(
+                        builder,
+                        addr,
+                        core.LLVMConstInt(core.LLVMInt32TypeInContext(llvm_ctx), mem_arg.offset, 0),
+                        "",
+                    );
+
+                    var args = [_]types.LLVMValueRef{
+                        core.LLVMGetParam(func, 0),
+                        effective_offset,
+                        val,
+                    };
+                    _ = buildCall(builder, ctx.stubs.get(.set_i32), &args);
                 },
 
                 .@"i32.const" => |value| {
@@ -693,9 +720,9 @@ pub const CodeCompiler = struct {
                         val,
                         core.LLVMConstInt(core.LLVMInt1Type(), 0, 0),
                     };
-                    const result = buildIntrinsicCall(
+                    const result = buildCall(
                         builder,
-                        ctx.intrinsics.@"llvm.ctlz.i32",
+                        ctx.intrinsics.get(.@"llvm.ctlz.i32"),
                         &args,
                     );
                     try state.push(allocator, result);
@@ -707,9 +734,9 @@ pub const CodeCompiler = struct {
                         val,
                         core.LLVMConstInt(core.LLVMInt1Type(), 0, 0),
                     };
-                    const result = buildIntrinsicCall(
+                    const result = buildCall(
                         builder,
-                        ctx.intrinsics.@"llvm.cttz.i32",
+                        ctx.intrinsics.get(.@"llvm.cttz.i32"),
                         &args,
                     );
                     try state.push(allocator, result);
@@ -718,9 +745,9 @@ pub const CodeCompiler = struct {
                 .@"i32.popcnt" => {
                     const val = state.pop().?;
                     var args = [_]types.LLVMValueRef{val};
-                    const result = buildIntrinsicCall(
+                    const result = buildCall(
                         builder,
-                        ctx.intrinsics.@"llvm.ctpop.i32",
+                        ctx.intrinsics.get(.@"llvm.ctpop.i32"),
                         &args,
                     );
                     try state.push(allocator, result);
@@ -732,9 +759,9 @@ pub const CodeCompiler = struct {
                         val,
                         core.LLVMConstInt(core.LLVMInt1Type(), 0, 0),
                     };
-                    const result = buildIntrinsicCall(
+                    const result = buildCall(
                         builder,
-                        ctx.intrinsics.@"llvm.ctlz.i64",
+                        ctx.intrinsics.get(.@"llvm.ctlz.i64"),
                         &args,
                     );
                     try state.push(allocator, result);
@@ -746,9 +773,9 @@ pub const CodeCompiler = struct {
                         val,
                         core.LLVMConstInt(core.LLVMInt1Type(), 0, 0),
                     };
-                    const result = buildIntrinsicCall(
+                    const result = buildCall(
                         builder,
-                        ctx.intrinsics.@"llvm.cttz.i64",
+                        ctx.intrinsics.get(.@"llvm.cttz.i64"),
                         &args,
                     );
                     try state.push(allocator, result);
@@ -757,9 +784,9 @@ pub const CodeCompiler = struct {
                 .@"i64.popcnt" => {
                     const val = state.pop().?;
                     var args = [_]types.LLVMValueRef{val};
-                    const result = buildIntrinsicCall(
+                    const result = buildCall(
                         builder,
-                        ctx.intrinsics.@"llvm.ctpop.i64",
+                        ctx.intrinsics.get(.@"llvm.ctpop.i64"),
                         &args,
                     );
                     try state.push(allocator, result);
@@ -860,9 +887,9 @@ pub const CodeCompiler = struct {
                     const arg2 = state.pop().?;
                     const arg1 = state.pop().?;
                     var args = [_]types.LLVMValueRef{ arg1, arg1, arg2 };
-                    const result = buildIntrinsicCall(
+                    const result = buildCall(
                         builder,
-                        ctx.intrinsics.@"llvm.fshl.i32",
+                        ctx.intrinsics.get(.@"llvm.fshl.i32"),
                         &args,
                     );
                     try state.push(allocator, result);
@@ -872,9 +899,9 @@ pub const CodeCompiler = struct {
                     const arg2 = state.pop().?;
                     const arg1 = state.pop().?;
                     var args = [_]types.LLVMValueRef{ arg1, arg1, arg2 };
-                    const result = buildIntrinsicCall(
+                    const result = buildCall(
                         builder,
-                        ctx.intrinsics.@"llvm.fshr.i32",
+                        ctx.intrinsics.get(.@"llvm.fshr.i32"),
                         &args,
                     );
                     try state.push(allocator, result);
@@ -884,9 +911,9 @@ pub const CodeCompiler = struct {
                     const arg2 = state.pop().?;
                     const arg1 = state.pop().?;
                     var args = [_]types.LLVMValueRef{ arg1, arg1, arg2 };
-                    const result = buildIntrinsicCall(
+                    const result = buildCall(
                         builder,
-                        ctx.intrinsics.@"llvm.fshl.i64",
+                        ctx.intrinsics.get(.@"llvm.fshl.i64"),
                         &args,
                     );
                     try state.push(allocator, result);
@@ -896,9 +923,9 @@ pub const CodeCompiler = struct {
                     const arg2 = state.pop().?;
                     const arg1 = state.pop().?;
                     var args = [_]types.LLVMValueRef{ arg1, arg1, arg2 };
-                    const result = buildIntrinsicCall(
+                    const result = buildCall(
                         builder,
-                        ctx.intrinsics.@"llvm.fshr.i64",
+                        ctx.intrinsics.get(.@"llvm.fshr.i64"),
                         &args,
                     );
                     try state.push(allocator, result);
@@ -907,9 +934,9 @@ pub const CodeCompiler = struct {
                 .@"f32.abs" => {
                     const val = state.pop().?;
                     var args = [_]types.LLVMValueRef{val};
-                    const result = buildIntrinsicCall(
+                    const result = buildCall(
                         builder,
-                        ctx.intrinsics.@"llvm.fabs.f32",
+                        ctx.intrinsics.get(.@"llvm.fabs.f32"),
                         &args,
                     );
                     try state.push(allocator, result);
@@ -924,9 +951,9 @@ pub const CodeCompiler = struct {
                 .@"f32.ceil" => {
                     const val = state.pop().?;
                     var args = [_]types.LLVMValueRef{val};
-                    const result = buildIntrinsicCall(
+                    const result = buildCall(
                         builder,
-                        ctx.intrinsics.@"llvm.ceil.f32",
+                        ctx.intrinsics.get(.@"llvm.ceil.f32"),
                         &args,
                     );
                     try state.push(allocator, result);
@@ -935,9 +962,9 @@ pub const CodeCompiler = struct {
                 .@"f32.floor" => {
                     const val = state.pop().?;
                     var args = [_]types.LLVMValueRef{val};
-                    const result = buildIntrinsicCall(
+                    const result = buildCall(
                         builder,
-                        ctx.intrinsics.@"llvm.floor.f32",
+                        ctx.intrinsics.get(.@"llvm.floor.f32"),
                         &args,
                     );
                     try state.push(allocator, result);
@@ -946,9 +973,9 @@ pub const CodeCompiler = struct {
                 .@"f32.trunc" => {
                     const val = state.pop().?;
                     var args = [_]types.LLVMValueRef{val};
-                    const result = buildIntrinsicCall(
+                    const result = buildCall(
                         builder,
-                        ctx.intrinsics.@"llvm.trunc.f32",
+                        ctx.intrinsics.get(.@"llvm.trunc.f32"),
                         &args,
                     );
                     try state.push(allocator, result);
@@ -957,9 +984,9 @@ pub const CodeCompiler = struct {
                 .@"f32.nearest" => {
                     const val = state.pop().?;
                     var args = [_]types.LLVMValueRef{val};
-                    const result = buildIntrinsicCall(
+                    const result = buildCall(
                         builder,
-                        ctx.intrinsics.@"llvm.nearbyint.f32",
+                        ctx.intrinsics.get(.@"llvm.nearbyint.f32"),
                         &args,
                     );
                     try state.push(allocator, result);
@@ -968,9 +995,9 @@ pub const CodeCompiler = struct {
                 .@"f32.sqrt" => {
                     const val = state.pop().?;
                     var args = [_]types.LLVMValueRef{val};
-                    const result = buildIntrinsicCall(
+                    const result = buildCall(
                         builder,
-                        ctx.intrinsics.@"llvm.sqrt.f32",
+                        ctx.intrinsics.get(.@"llvm.sqrt.f32"),
                         &args,
                     );
                     try state.push(allocator, result);
@@ -980,9 +1007,9 @@ pub const CodeCompiler = struct {
                     const arg2 = state.pop().?;
                     const arg1 = state.pop().?;
                     var args = [_]types.LLVMValueRef{ arg1, arg2 };
-                    const result = buildIntrinsicCall(
+                    const result = buildCall(
                         builder,
-                        ctx.intrinsics.@"llvm.minnum.f32",
+                        ctx.intrinsics.get(.@"llvm.minnum.f32"),
                         &args,
                     );
                     try state.push(allocator, result);
@@ -992,9 +1019,9 @@ pub const CodeCompiler = struct {
                     const arg2 = state.pop().?;
                     const arg1 = state.pop().?;
                     var args = [_]types.LLVMValueRef{ arg1, arg2 };
-                    const result = buildIntrinsicCall(
+                    const result = buildCall(
                         builder,
-                        ctx.intrinsics.@"llvm.maxnum.f32",
+                        ctx.intrinsics.get(.@"llvm.maxnum.f32"),
                         &args,
                     );
                     try state.push(allocator, result);
@@ -1004,9 +1031,9 @@ pub const CodeCompiler = struct {
                     const arg2 = state.pop().?;
                     const arg1 = state.pop().?;
                     var args = [_]types.LLVMValueRef{ arg1, arg2 };
-                    const result = buildIntrinsicCall(
+                    const result = buildCall(
                         builder,
-                        ctx.intrinsics.@"llvm.copysign.f32",
+                        ctx.intrinsics.get(.@"llvm.copysign.f32"),
                         &args,
                     );
                     try state.push(allocator, result);
@@ -1015,9 +1042,9 @@ pub const CodeCompiler = struct {
                 .@"f64.abs" => {
                     const val = state.pop().?;
                     var args = [_]types.LLVMValueRef{val};
-                    const result = buildIntrinsicCall(
+                    const result = buildCall(
                         builder,
-                        ctx.intrinsics.@"llvm.fabs.f64",
+                        ctx.intrinsics.get(.@"llvm.fabs.f64"),
                         &args,
                     );
                     try state.push(allocator, result);
@@ -1026,9 +1053,9 @@ pub const CodeCompiler = struct {
                 .@"f64.ceil" => {
                     const val = state.pop().?;
                     var args = [_]types.LLVMValueRef{val};
-                    const result = buildIntrinsicCall(
+                    const result = buildCall(
                         builder,
-                        ctx.intrinsics.@"llvm.ceil.f64",
+                        ctx.intrinsics.get(.@"llvm.ceil.f64"),
                         &args,
                     );
                     try state.push(allocator, result);
@@ -1037,9 +1064,9 @@ pub const CodeCompiler = struct {
                 .@"f64.floor" => {
                     const val = state.pop().?;
                     var args = [_]types.LLVMValueRef{val};
-                    const result = buildIntrinsicCall(
+                    const result = buildCall(
                         builder,
-                        ctx.intrinsics.@"llvm.floor.f64",
+                        ctx.intrinsics.get(.@"llvm.floor.f64"),
                         &args,
                     );
                     try state.push(allocator, result);
@@ -1048,9 +1075,9 @@ pub const CodeCompiler = struct {
                 .@"f64.trunc" => {
                     const val = state.pop().?;
                     var args = [_]types.LLVMValueRef{val};
-                    const result = buildIntrinsicCall(
+                    const result = buildCall(
                         builder,
-                        ctx.intrinsics.@"llvm.trunc.f64",
+                        ctx.intrinsics.get(.@"llvm.trunc.f64"),
                         &args,
                     );
                     try state.push(allocator, result);
@@ -1059,9 +1086,9 @@ pub const CodeCompiler = struct {
                 .@"f64.nearest" => {
                     const val = state.pop().?;
                     var args = [_]types.LLVMValueRef{val};
-                    const result = buildIntrinsicCall(
+                    const result = buildCall(
                         builder,
-                        ctx.intrinsics.@"llvm.nearbyint.f64",
+                        ctx.intrinsics.get(.@"llvm.nearbyint.f64"),
                         &args,
                     );
                     try state.push(allocator, result);
@@ -1070,9 +1097,9 @@ pub const CodeCompiler = struct {
                 .@"f64.sqrt" => {
                     const val = state.pop().?;
                     var args = [_]types.LLVMValueRef{val};
-                    const result = buildIntrinsicCall(
+                    const result = buildCall(
                         builder,
-                        ctx.intrinsics.@"llvm.sqrt.f64",
+                        ctx.intrinsics.get(.@"llvm.sqrt.f64"),
                         &args,
                     );
                     try state.push(allocator, result);
@@ -1110,9 +1137,9 @@ pub const CodeCompiler = struct {
                     const arg2 = state.pop().?;
                     const arg1 = state.pop().?;
                     var args = [_]types.LLVMValueRef{ arg1, arg2 };
-                    const result = buildIntrinsicCall(
+                    const result = buildCall(
                         builder,
-                        ctx.intrinsics.@"llvm.minnum.f64",
+                        ctx.intrinsics.get(.@"llvm.minnum.f64"),
                         &args,
                     );
                     try state.push(allocator, result);
@@ -1122,9 +1149,9 @@ pub const CodeCompiler = struct {
                     const arg2 = state.pop().?;
                     const arg1 = state.pop().?;
                     var args = [_]types.LLVMValueRef{ arg1, arg2 };
-                    const result = buildIntrinsicCall(
+                    const result = buildCall(
                         builder,
-                        ctx.intrinsics.@"llvm.maxnum.f64",
+                        ctx.intrinsics.get(.@"llvm.maxnum.f64"),
                         &args,
                     );
                     try state.push(allocator, result);
@@ -1134,9 +1161,9 @@ pub const CodeCompiler = struct {
                     const arg2 = state.pop().?;
                     const arg1 = state.pop().?;
                     var args = [_]types.LLVMValueRef{ arg1, arg2 };
-                    const result = buildIntrinsicCall(
+                    const result = buildCall(
                         builder,
-                        ctx.intrinsics.@"llvm.copysign.f64",
+                        ctx.intrinsics.get(.@"llvm.copysign.f64"),
                         &args,
                     );
                     try state.push(allocator, result);
@@ -1419,15 +1446,15 @@ pub const CodeCompiler = struct {
     }
 };
 
-fn buildIntrinsicCall(
+fn buildCall(
     builder: types.LLVMBuilderRef,
-    intrinsic: Intrinsic,
+    func: Value,
     args: []types.LLVMValueRef,
 ) types.LLVMValueRef {
     return core.LLVMBuildCall2(
         builder,
-        intrinsic.ty,
-        intrinsic.func,
+        core.LLVMGlobalGetValueType(func),
+        func,
         @ptrCast(args),
         @intCast(args.len),
         "",

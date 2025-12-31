@@ -3,7 +3,8 @@ const Context = @This();
 const std = @import("std");
 const llvm = @import("llvm");
 
-const Intrinsics = @import("intrinsics.zig").Intrinsics;
+const Intrinsics = @import("codegen/intrinsics.zig").Intrinsics;
+const Stubs = @import("codegen/stubs.zig").Stubs;
 
 const types = llvm.types;
 const core = llvm.core;
@@ -16,6 +17,7 @@ llvm_module: types.LLVMModuleRef,
 llvm_context: types.LLVMContextRef,
 
 intrinsics: Intrinsics,
+stubs: Stubs,
 
 functypes: std.ArrayList(types.LLVMTypeRef) = .{},
 funcs: std.ArrayList(types.LLVMValueRef) = .{},
@@ -23,14 +25,16 @@ funcs: std.ArrayList(types.LLVMValueRef) = .{},
 imported_funcs: u32 = 0,
 
 pub fn init(allocator: Allocator) Context {
-    const context = core.LLVMContextCreate();
-    const module = core.LLVMModuleCreateWithNameInContext("wasm", context);
-    const intrinsics = Intrinsics.init(module, context);
+    const ctx = core.LLVMContextCreate();
+    const module = core.LLVMModuleCreateWithNameInContext("", ctx);
+    const intrinsics = Intrinsics.init(module, ctx);
+    const stubs = Stubs.init(module, ctx);
     return .{
         .allocator = allocator,
         .llvm_module = module,
-        .llvm_context = context,
+        .llvm_context = ctx,
         .intrinsics = intrinsics,
+        .stubs = stubs,
     };
 }
 

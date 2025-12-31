@@ -89,7 +89,8 @@ pub fn validateCode(ctx: *Context, body: types.FuncBody, func_idx: u32) !void {
     var state = State{};
     defer state.deinit(allocator);
 
-    try state.pushFrame(allocator, .block, func_type.results[0]);
+    const func_res = if (func_type.results.len != 0) func_type.results[0] else null;
+    try state.pushFrame(allocator, .block, func_res);
 
     var has_returned = false;
 

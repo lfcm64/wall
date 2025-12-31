@@ -3,7 +3,6 @@ const Compiler = @This();
 const std = @import("std");
 const wasm = @import("wasm");
 
-const exports = @import("codegen/exports.zig");
 const function = @import("codegen/function.zig");
 const code = @import("codegen/code.zig");
 
@@ -72,7 +71,7 @@ fn compileExportSection(self: *Compiler, section: Section(.@"export")) !void {
     try self.compileEach(
         .@"export",
         section,
-        exports.ExportCompiler.compile,
+        function.ExportCompiler.compile,
     );
 }
 

@@ -7,19 +7,22 @@ pub fn main() !void {
     const allocator = gpa.allocator();
     defer _ = gpa.deinit();
 
-    const source = @embedFile("tests/fib.wasm");
+    const source = @embedFile("tests/test.wasm");
 
-    var mod = Module.init(allocator, source);
-    defer mod.deinit();
+    var module = Module.init(allocator, source);
+    defer module.deinit();
 
-    var instance = try mod.instantiate();
+    var instance = try module.instantiate();
     defer instance.deinit();
 
-    const fib = try instance.getFunction(
-        "fib",
-        *const fn (*anyopaque, i32) callconv(.c) i32,
+    const writeZero = try instance.getFunction(
+        "writeZero",
+        *const fn (*anyopaque) callconv(.c) void,
     );
 
-    const result = fib(undefined, 8);
-    std.debug.print("fib(8) = {}\n", .{result});
+    std.debug.print("{any}\n", .{instance.vmctx.memory});
+    _ = writeZero(&instance.vmctx);
+
+    std.debug.print("{any}\n", .{instance.vmctx.memory});
+    //std.debug.print("fib(8) = {}\n", .{result});
 }
